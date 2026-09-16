@@ -97,6 +97,8 @@ CSRF_TRUSTED_ORIGINS = [
     'http://127.0.0.1:8000',
     'http://localhost:8001',
     'http://127.0.0.1:8001',
+    'https://operation-r9e5.onrender.com',
+    'https://*.onrender.com',
 ]
 
 # ─────────────────────────────────────────────────────────────
