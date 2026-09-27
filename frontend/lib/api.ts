@@ -10,8 +10,8 @@ export const getOpsBaseUrl = () => {
     return activeBaseUrl;
   }
   if (typeof window !== 'undefined') {
-    if (window.location.hostname.includes('onrender.com')) {
-      return 'https://beta-ops.onrender.com/api';
+    if (window.location.hostname.includes('ops.wisbees.com') || window.location.hostname.includes('onrender.com')) {
+      return 'https://ops.backend.wisbees.com/api';
     }
     const savedPort = localStorage.getItem('ops_api_port');
     if (savedPort) {
