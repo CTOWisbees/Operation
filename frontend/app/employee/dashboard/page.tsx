@@ -75,6 +75,7 @@ export default function EmployeeDashboardPage() {
   const rawDepts = employee.assigned_departments || (employee.department ? [employee.department] : (storedUser?.assigned_departments || (storedUser?.department ? [storedUser.department] : [])));
   const assignedDepts = Array.isArray(rawDepts) ? rawDepts.filter(Boolean) : (rawDepts ? [rawDepts] : ['Operations']);
   const displayDepts = assignedDepts.length > 0 ? assignedDepts.join(' & ') : (employee.department || storedUser?.department || 'Operations');
+  const assignedModules = employee.assigned_modules || storedUser?.assigned_modules || [];
 
   const hour = new Date().getHours();
   let greeting = 'Good Morning';
