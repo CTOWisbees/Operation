@@ -2269,13 +2269,21 @@ def api_assigned_tasks(request):
         for t in qs[:150]
     ]
 
+    all_active_depts = list(Department.objects.filter(is_active=True).order_by('name').values_list('name', flat=True))
+    if not all_active_depts:
+        all_active_depts = managed_depts or [user.department or 'Operations']
+
+    active_employees = OperationUser.objects.filter(is_active=True).order_by('name')
+
     return JsonResponse({
         'success': True,
         'count': len(tasks_data),
         'tasks': tasks_data,
         'user_is_manager': user.is_manager,
         'user_is_superadmin': is_superadmin,
-        'managed_departments': managed_depts,
+        'managed_departments': managed_depts or all_active_depts,
+        'departments': all_active_depts,
+        'team_members': [serialize_user(emp) for emp in active_employees],
     })
 
 
@@ -2283,9 +2291,10 @@ def api_assigned_tasks(request):
 @require_POST
 def api_create_assigned_task(request):
     """
-    Superadmin or Department Manager creates a task:
-    - Superadmin can assign to any department and any employee.
-    - Department Manager can assign to their managed department(s) and any employee in that department.
+    Superadmin or Department Manager creates tasks:
+    - Single Person: 1 task assigned to specific employee
+    - Multiple Persons: Clones task to all selected employees
+    - By Department / Broadcast: 1 task assigned to whole department
     """
     user = get_current_user(request)
     if not user:
@@ -2300,7 +2309,9 @@ def api_create_assigned_task(request):
     title = (data.get('title') or '').strip()
     description = (data.get('description') or '').strip()
     department = (data.get('department') or '').strip()
+    assign_mode = data.get('assign_mode', 'single')
     assigned_to_id = data.get('assigned_to_id')
+    assigned_to_ids = data.get('assigned_to_ids', [])
     task_type = data.get('task_type') or 'Major'
     priority = data.get('priority') or 'Normal'
     due_date_str = data.get('due_date')
@@ -2318,10 +2329,6 @@ def api_create_assigned_task(request):
         if managed_depts and department not in managed_depts:
             return JsonResponse({'success': False, 'error': f'You are only authorized to assign tasks in: {", ".join(managed_depts)}'}, status=403)
 
-    assigned_to_user = None
-    if assigned_to_id:
-        assigned_to_user = OperationUser.objects.filter(id=assigned_to_id).first()
-
     due_date = None
     if due_date_str:
         try:
@@ -2329,28 +2336,84 @@ def api_create_assigned_task(request):
         except Exception:
             pass
 
-    task = DailyAssignedTask.objects.create(
-        title=title,
-        description=description,
-        department=department,
-        assigned_by=user,
-        assigned_to=assigned_to_user,
-        task_type=task_type,
-        priority=priority,
-        due_date=due_date,
-        status='Pending'
-    )
+    created_tasks = []
 
-    ActivityLog.objects.create(
-        user=user,
-        action=f"Created task '{title}' for {assigned_to_user.name if assigned_to_user else department} ({department})"
-    )
+    if assign_mode == 'multiple' and assigned_to_ids:
+        target_users = OperationUser.objects.filter(id__in=assigned_to_ids, is_active=True)
+        for emp in target_users:
+            t = DailyAssignedTask.objects.create(
+                title=title,
+                description=description,
+                department=department,
+                assigned_by=user,
+                assigned_to=emp,
+                task_type=task_type,
+                priority=priority,
+                due_date=due_date,
+                status='Pending'
+            )
+            created_tasks.append(t)
 
-    return JsonResponse({
-        'success': True,
-        'message': f"Task '{title}' assigned successfully!",
-        'task_id': task.id,
-    })
+        ActivityLog.objects.create(
+            user=user,
+            action=f"Assigned task '{title}' to {len(created_tasks)} team members in ({department})"
+        )
+
+        return JsonResponse({
+            'success': True,
+            'message': f"Task assigned to {len(created_tasks)} team members successfully!",
+            'task_ids': [t.id for t in created_tasks],
+        })
+
+    elif assign_mode == 'single' and assigned_to_id:
+        assigned_to_user = OperationUser.objects.filter(id=assigned_to_id).first()
+        task = DailyAssignedTask.objects.create(
+            title=title,
+            description=description,
+            department=department,
+            assigned_by=user,
+            assigned_to=assigned_to_user,
+            task_type=task_type,
+            priority=priority,
+            due_date=due_date,
+            status='Pending'
+        )
+
+        ActivityLog.objects.create(
+            user=user,
+            action=f"Created task '{title}' for {assigned_to_user.name if assigned_to_user else department} ({department})"
+        )
+
+        return JsonResponse({
+            'success': True,
+            'message': f"Task assigned to {assigned_to_user.name if assigned_to_user else 'team member'} successfully!",
+            'task_id': task.id,
+        })
+
+    else:
+        # Department broadcast mode
+        task = DailyAssignedTask.objects.create(
+            title=title,
+            description=description,
+            department=department,
+            assigned_by=user,
+            assigned_to=None,
+            task_type=task_type,
+            priority=priority,
+            due_date=due_date,
+            status='Pending'
+        )
+
+        ActivityLog.objects.create(
+            user=user,
+            action=f"Created broadcast task '{title}' for department ({department})"
+        )
+
+        return JsonResponse({
+            'success': True,
+            'message': f"Broadcast task assigned to department {department} successfully!",
+            'task_id': task.id,
+        })
 
 
 @csrf_exempt

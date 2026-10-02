@@ -3,8 +3,8 @@
 import React, { useState, useEffect } from 'react';
 import {
   CheckSquare, Plus, Search, Filter, Calendar, Clock,
-  AlertCircle, CheckCircle2, User, Building2, Flag,
-  Trash2, X, Send, RefreshCw, Zap, Shield, Sparkles
+  AlertCircle, CheckCircle2, User, Users, Building2, Flag,
+  Trash2, X, Send, RefreshCw, Zap, Shield, Sparkles, Globe
 } from 'lucide-react';
 import { api } from '@/lib/api';
 
@@ -21,6 +21,8 @@ export default function ManagerTasksPage() {
   // Create Task Modal state
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [assignMode, setAssignMode] = useState<'single' | 'multiple' | 'department'>('single');
+  const [selectedAssigneeIds, setSelectedAssigneeIds] = useState<number[]>([]);
   const [newTask, setNewTask] = useState({
     title: '',
     description: '',
@@ -42,29 +44,51 @@ export default function ManagerTasksPage() {
     try {
       setLoading(true);
       const [userRes, tasksRes, empRes] = await Promise.all([
-        api.get('/auth/me'),
-        api.get('/tracker/assigned-tasks'),
+        api.get('/auth/me').catch(() => ({ data: { user: null } })),
+        api.get('/tracker/assigned-tasks').catch(() => ({ data: { tasks: [] } })),
         api.get('/admin/employees').catch(() => ({ data: { employees: [] } }))
       ]);
 
+      let depts: string[] = [];
       if (userRes.data?.user) {
         const u = userRes.data.user;
         setUser(u);
-        const depts = u.managed_departments && u.managed_departments.length > 0
+        depts = u.managed_departments && u.managed_departments.length > 0
           ? u.managed_departments
-          : (u.managed_department ? [u.managed_department] : [u.department || 'IT']);
-        setManagedDepts(depts);
-        if (depts.length > 0 && !newTask.department) {
-          setNewTask(prev => ({ ...prev, department: depts[0] }));
-        }
+          : (u.managed_department ? [u.managed_department] : (u.department ? [u.department] : []));
       }
+
+      if (tasksRes.data?.managed_departments && tasksRes.data.managed_departments.length > 0) {
+        depts = Array.from(new Set([...depts, ...tasksRes.data.managed_departments]));
+      }
+      if (tasksRes.data?.departments && tasksRes.data.departments.length > 0) {
+        depts = Array.from(new Set([...depts, ...tasksRes.data.departments]));
+      }
+      if (depts.length === 0) {
+        depts = ['IT', 'Operations', 'Engineering', 'Marketing', 'Sales', 'HR', 'Finance'];
+      }
+      setManagedDepts(depts);
 
       if (tasksRes.data?.tasks) {
         setTasks(tasksRes.data.tasks);
       }
 
-      if (empRes.data?.employees) {
-        setTeamMembers(empRes.data.employees);
+      // Collect team members from both endpoints and deduplicate
+      const allEmps = [
+        ...(tasksRes.data?.team_members || []),
+        ...(empRes.data?.employees || [])
+      ];
+      const uniqueMap = new Map();
+      allEmps.forEach((emp: any) => {
+        if (emp && emp.id && !uniqueMap.has(emp.id)) {
+          uniqueMap.set(emp.id, emp);
+        }
+      });
+      const uniqueEmps = Array.from(uniqueMap.values());
+      setTeamMembers(uniqueEmps);
+
+      if (depts.length > 0 && !newTask.department) {
+        setNewTask(prev => ({ ...prev, department: depts[0] }));
       }
     } catch (err: any) {
       console.error('Failed to load manager tasks:', err);
@@ -77,6 +101,33 @@ export default function ManagerTasksPage() {
   useEffect(() => {
     fetchData();
   }, []);
+
+  const openCreateModal = () => {
+    const defaultDept = managedDepts[0] || (user?.department || 'IT');
+    const deptEmps = teamMembers.filter(m => !defaultDept || m.department === defaultDept || (m.assigned_departments && m.assigned_departments.includes(defaultDept)));
+    const firstEmpId = (deptEmps[0]?.id || teamMembers[0]?.id) ? String(deptEmps[0]?.id || teamMembers[0]?.id) : '';
+
+    setNewTask({
+      title: '',
+      description: '',
+      department: defaultDept,
+      assigned_to_id: firstEmpId,
+      task_type: 'Major',
+      priority: 'High',
+      due_date: new Date(Date.now() + 86400000 * 2).toISOString().split('T')[0],
+    });
+    setAssignMode('single');
+    setSelectedAssigneeIds(firstEmpId ? [Number(firstEmpId)] : []);
+    setShowCreateModal(true);
+  };
+
+  const toggleMultipleAssignee = (id: number) => {
+    if (selectedAssigneeIds.includes(id)) {
+      setSelectedAssigneeIds(selectedAssigneeIds.filter(empId => empId !== id));
+    } else {
+      setSelectedAssigneeIds([...selectedAssigneeIds, id]);
+    }
+  };
 
   const handleCreateTask = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -94,24 +145,30 @@ export default function ManagerTasksPage() {
         task_type: newTask.task_type,
         priority: newTask.priority,
         due_date: newTask.due_date,
+        assign_mode: assignMode,
       };
-      if (newTask.assigned_to_id) {
+
+      if (assignMode === 'single') {
+        if (!newTask.assigned_to_id) {
+          showFeedback('Please select a team member from the dropdown.', 'error');
+          setCreating(false);
+          return;
+        }
         payload.assigned_to_id = Number(newTask.assigned_to_id);
+      } else if (assignMode === 'multiple') {
+        if (selectedAssigneeIds.length === 0) {
+          showFeedback('Please select at least one team member.', 'error');
+          setCreating(false);
+          return;
+        }
+        payload.assigned_to_ids = selectedAssigneeIds;
       }
+      // 'department' mode will broadcast
 
       const res = await api.post('/tracker/assigned-tasks/create', payload);
       if (res.data?.success) {
         showFeedback(res.data.message || 'Task assigned successfully!');
         setShowCreateModal(false);
-        setNewTask({
-          title: '',
-          description: '',
-          department: managedDepts[0] || '',
-          assigned_to_id: '',
-          task_type: 'Major',
-          priority: 'High',
-          due_date: new Date(Date.now() + 86400000 * 2).toISOString().split('T')[0],
-        });
         fetchData();
       } else {
         showFeedback(res.data?.error || 'Failed to create task.', 'error');
@@ -190,7 +247,7 @@ export default function ManagerTasksPage() {
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
           </button>
           <button
-            onClick={() => setShowCreateModal(true)}
+            onClick={openCreateModal}
             className="px-4 py-2.5 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white rounded-xl text-xs font-bold transition flex items-center gap-2 shadow-sm cursor-pointer whitespace-nowrap"
           >
             <Plus className="w-4 h-4" />
@@ -370,17 +427,18 @@ export default function ManagerTasksPage() {
       </div>
 
       {/* Create Task Modal */}
+      {/* Create Task Modal */}
       {showCreateModal && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-xs z-50 flex items-center justify-center p-4">
-          <div className="bg-[var(--card-bg)] border border-[var(--card-border)] rounded-3xl max-w-xl w-full p-6 shadow-2xl space-y-5 animate-scaleUp">
+          <div className="bg-[var(--card-bg)] border border-[var(--card-border)] rounded-3xl max-w-xl w-full p-6 shadow-2xl space-y-5 animate-scaleUp max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between border-b border-[var(--card-border)] pb-4">
               <div className="flex items-center gap-2.5">
-                <div className="w-9 h-9 rounded-xl bg-purple-500/10 text-purple-600 flex items-center justify-center font-black">
+                <div className="w-9 h-9 rounded-xl bg-purple-500/10 text-purple-600 dark:text-purple-400 flex items-center justify-center font-black">
                   <Plus className="w-5 h-5" />
                 </div>
                 <div>
                   <h3 className="text-base font-black text-[var(--text-primary)]">Assign Department Task</h3>
-                  <p className="text-xs text-[var(--text-muted)]">Assign specific deliverables to department team members</p>
+                  <p className="text-xs text-[var(--text-muted)]">Assign specific deliverables to single or multiple department team members</p>
                 </div>
               </div>
               <button
@@ -392,6 +450,7 @@ export default function ManagerTasksPage() {
             </div>
 
             <form onSubmit={handleCreateTask} className="space-y-4">
+              {/* Task Title */}
               <div>
                 <label className="block text-xs font-bold text-[var(--text-primary)] mb-1">
                   Task Title *
@@ -406,56 +465,191 @@ export default function ManagerTasksPage() {
                 />
               </div>
 
+              {/* Task Description */}
               <div>
                 <label className="block text-xs font-bold text-[var(--text-primary)] mb-1">
                   Detailed Description / Requirements
                 </label>
                 <textarea
-                  rows={3}
+                  rows={2}
                   placeholder="Specific instructions, endpoints, acceptance criteria..."
                   value={newTask.description}
                   onChange={(e) => setNewTask({ ...newTask, description: e.target.value })}
-                  className="w-full px-3.5 py-2 rounded-xl border border-[var(--card-border)] bg-[var(--sidebar-bg)] text-xs font-medium text-[var(--text-primary)] focus:outline-none focus:ring-2 focus:ring-purple-500"
+                  className="w-full px-3.5 py-2 rounded-xl border border-[var(--card-border)] bg-[var(--sidebar-bg)] text-xs font-medium text-[var(--text-primary)] focus:outline-none focus:ring-2 focus:ring-purple-500 resize-none"
                 />
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {/* ── ASSIGNMENT TARGET MODE ── */}
+              <div className="p-3.5 bg-purple-50/50 dark:bg-purple-950/20 rounded-2xl border border-purple-200 dark:border-purple-900/60 space-y-3">
+                <label className="font-extrabold uppercase tracking-wider text-[11px] text-purple-900 dark:text-purple-300 flex items-center gap-1.5">
+                  <Users className="w-4 h-4 text-purple-600" />
+                  <span>Assign To / Target Scope</span>
+                </label>
+
+                {/* 3 Mode Pills */}
+                <div className="grid grid-cols-3 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setAssignMode('single')}
+                    className={`py-2 px-2 rounded-xl font-bold text-center transition flex flex-col items-center gap-1 cursor-pointer ${
+                      assignMode === 'single'
+                        ? 'bg-purple-600 text-white shadow-xs'
+                        : 'bg-[var(--card-bg)] text-[var(--text-secondary)] border border-[var(--card-border)] hover:bg-[var(--hover-bg)]'
+                    }`}
+                  >
+                    <User className="w-3.5 h-3.5" />
+                    <span className="text-[11px]">Single Person</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setAssignMode('multiple')}
+                    className={`py-2 px-2 rounded-xl font-bold text-center transition flex flex-col items-center gap-1 cursor-pointer ${
+                      assignMode === 'multiple'
+                        ? 'bg-purple-600 text-white shadow-xs'
+                        : 'bg-[var(--card-bg)] text-[var(--text-secondary)] border border-[var(--card-border)] hover:bg-[var(--hover-bg)]'
+                    }`}
+                  >
+                    <Users className="w-3.5 h-3.5" />
+                    <span className="text-[11px]">Multiple Team</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setAssignMode('department')}
+                    className={`py-2 px-2 rounded-xl font-bold text-center transition flex flex-col items-center gap-1 cursor-pointer ${
+                      assignMode === 'department'
+                        ? 'bg-purple-600 text-white shadow-xs'
+                        : 'bg-[var(--card-bg)] text-[var(--text-secondary)] border border-[var(--card-border)] hover:bg-[var(--hover-bg)]'
+                    }`}
+                  >
+                    <Building2 className="w-3.5 h-3.5" />
+                    <span className="text-[11px]">Whole Dept</span>
+                  </button>
+                </div>
+
+                {/* Department Dropdown */}
                 <div>
-                  <label className="block text-xs font-bold text-[var(--text-primary)] mb-1">
-                    Department *
-                  </label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-[10px] font-bold uppercase text-[var(--text-muted)]">
+                      Target Department *
+                    </label>
+                    <span className="text-[10px] text-purple-600 dark:text-purple-400 font-bold">
+                      {managedDepts.length} departments available
+                    </span>
+                  </div>
                   <select
                     value={newTask.department}
                     onChange={(e) => setNewTask({ ...newTask, department: e.target.value })}
-                    className="w-full px-3.5 py-2.5 rounded-xl border border-[var(--card-border)] bg-[var(--sidebar-bg)] text-xs font-bold text-[var(--text-primary)] focus:outline-none focus:ring-2 focus:ring-purple-500 cursor-pointer"
+                    className="w-full px-3.5 py-2 rounded-xl border border-[var(--card-border)] bg-[var(--card-bg)] text-xs font-bold text-[var(--text-primary)] focus:outline-none focus:ring-2 focus:ring-purple-500 cursor-pointer"
                   >
-                    {managedDepts.map(d => (
-                      <option key={d} value={d}>{d}</option>
-                    ))}
+                    {managedDepts.map(d => {
+                      const count = teamMembers.filter(m => m.department === d || (m.assigned_departments && m.assigned_departments.includes(d))).length;
+                      return (
+                        <option key={d} value={d}>
+                          {d} ({count} active member{count === 1 ? '' : 's'})
+                        </option>
+                      );
+                    })}
                   </select>
                 </div>
 
-                <div>
-                  <label className="block text-xs font-bold text-[var(--text-primary)] mb-1">
-                    Assign To Team Member
-                  </label>
-                  <select
-                    value={newTask.assigned_to_id}
-                    onChange={(e) => setNewTask({ ...newTask, assigned_to_id: e.target.value })}
-                    className="w-full px-3.5 py-2.5 rounded-xl border border-[var(--card-border)] bg-[var(--sidebar-bg)] text-xs font-bold text-[var(--text-primary)] focus:outline-none focus:ring-2 focus:ring-purple-500 cursor-pointer"
-                  >
-                    <option value="">Broadcast to whole department</option>
-                    {teamMembers
-                      .filter(m => !newTask.department || m.department === newTask.department || (m.assigned_departments && m.assigned_departments.includes(newTask.department)))
-                      .map(m => (
-                        <option key={m.id} value={m.id}>
-                          {m.name} ({m.designation || m.emp_type || 'Member'})
-                        </option>
-                      ))}
-                  </select>
-                </div>
+                {/* Sub-selectors depending on mode */}
+                {(() => {
+                  const filteredDeptEmps = teamMembers.filter(
+                    m => !newTask.department || m.department === newTask.department || (m.assigned_departments && m.assigned_departments.includes(newTask.department))
+                  );
+                  const displayEmps = filteredDeptEmps.length > 0 ? filteredDeptEmps : teamMembers;
+
+                  if (assignMode === 'single') {
+                    return (
+                      <div>
+                        <div className="flex items-center justify-between mb-1">
+                          <label className="block text-[10px] font-bold uppercase text-[var(--text-muted)]">
+                            Select Team Member:
+                          </label>
+                          <span className="text-[10px] text-purple-600 dark:text-purple-400 font-bold">
+                            {displayEmps.length} members available
+                          </span>
+                        </div>
+                        <select
+                          value={newTask.assigned_to_id}
+                          onChange={(e) => setNewTask({ ...newTask, assigned_to_id: e.target.value })}
+                          className="w-full px-3.5 py-2.5 rounded-xl border border-[var(--card-border)] bg-[var(--card-bg)] text-xs font-bold text-[var(--text-primary)] focus:outline-none focus:ring-2 focus:ring-purple-500 cursor-pointer"
+                        >
+                          {displayEmps.length === 0 ? (
+                            <option value="" disabled>Loading team members from database...</option>
+                          ) : (
+                            <>
+                              <option value="">-- Choose Team Member --</option>
+                              {displayEmps.map(m => (
+                                <option key={m.id} value={m.id}>
+                                  {m.name || m.full_name} — {m.designation || m.department || 'Operations Member'} ({m.email})
+                                </option>
+                              ))}
+                            </>
+                          )}
+                        </select>
+                      </div>
+                    );
+                  }
+
+                  if (assignMode === 'multiple') {
+                    return (
+                      <div>
+                        <div className="flex items-center justify-between text-[10px] font-bold uppercase text-[var(--text-muted)] mb-1.5">
+                          <span>Select Multiple Team Members:</span>
+                          <span className="text-purple-600 dark:text-purple-400 font-bold">{selectedAssigneeIds.length} selected</span>
+                        </div>
+                        {displayEmps.length === 0 ? (
+                          <div className="p-3 text-center text-xs text-[var(--text-muted)] bg-[var(--card-bg)] rounded-xl border border-[var(--card-border)]">
+                            Loading team members from database...
+                          </div>
+                        ) : (
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 max-h-44 overflow-y-auto pr-1">
+                            {displayEmps.map(emp => {
+                              const isSel = selectedAssigneeIds.includes(emp.id);
+                              return (
+                                <button
+                                  key={emp.id}
+                                  type="button"
+                                  onClick={() => toggleMultipleAssignee(emp.id)}
+                                  className={`p-2 rounded-xl border text-left text-xs transition flex items-center justify-between cursor-pointer ${
+                                    isSel
+                                      ? 'bg-purple-600 text-white border-purple-600 font-bold shadow-xs'
+                                      : 'bg-[var(--card-bg)] text-[var(--text-primary)] border-[var(--card-border)] hover:bg-[var(--hover-bg)]'
+                                  }`}
+                                >
+                                  <div className="truncate pr-1">
+                                    <div className="truncate font-bold">{emp.name || emp.full_name}</div>
+                                    <div className={`text-[10px] truncate ${isSel ? 'text-purple-100' : 'text-[var(--text-muted)]'}`}>
+                                      {emp.designation || emp.department || 'Operations'}
+                                    </div>
+                                  </div>
+                                  {isSel ? <CheckCircle2 className="w-4 h-4 shrink-0 text-white" /> : <div className="w-4 h-4 rounded border border-[var(--card-border)] shrink-0" />}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  }
+
+                  if (assignMode === 'department') {
+                    return (
+                      <div className="p-3 bg-purple-100 dark:bg-purple-950/60 rounded-xl text-purple-900 dark:text-purple-200 text-xs font-semibold flex items-center gap-2.5 border border-purple-200 dark:border-purple-800">
+                        <Building2 className="w-5 h-5 shrink-0 text-purple-600" />
+                        <span>This task will be automatically broadcast to all active members of the <strong>{newTask.department}</strong> department.</span>
+                      </div>
+                    );
+                  }
+
+                  return null;
+                })()}
               </div>
 
+              {/* Task Type, Priority & Due Date */}
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div>
                   <label className="block text-xs font-bold text-[var(--text-primary)] mb-1">
@@ -504,6 +698,7 @@ export default function ManagerTasksPage() {
                 </div>
               </div>
 
+              {/* Actions */}
               <div className="flex items-center justify-end gap-3 pt-3 border-t border-[var(--card-border)]">
                 <button
                   type="button"
