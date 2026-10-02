@@ -747,8 +747,8 @@ def api_admin_dashboard(request):
     if not user or user.role != 'admin':
         return JsonResponse({'error': 'Admin privileges required'}, status=403)
 
-    total_employees = OperationUser.objects.filter(role='employee').count()
-    active_employees = OperationUser.objects.filter(role='employee', is_active=True, status='Active').count()
+    total_employees = OperationUser.objects.count()
+    active_employees = OperationUser.objects.filter(is_active=True).count()
     total_tasks = WorkTask.objects.count()
     completed_tasks = WorkTask.objects.filter(status='Completed').count()
     in_progress_tasks = WorkTask.objects.filter(status='In Progress').count()
@@ -1198,19 +1198,27 @@ def api_employee_dashboard(request):
     completed_count = my_tasks.filter(status='Completed').count()
     urgent_count = my_tasks.filter(priority='Urgent', status__in=['Todo', 'In Progress']).count()
 
-    active_tasks = my_tasks.exclude(status='Completed').order_by('deadline', '-created_at')[:5]
-    recent_completed = my_tasks.filter(status='Completed').order_by('-completed_at')[:4]
+    today_dt = timezone.now().date()
+    today_tracker = DailyTrackerDay.objects.filter(user=emp, date=today_dt).first()
+
+    assigned_dept_tasks = DailyAssignedTask.objects.filter(
+        Q(assigned_to=emp) |
+        (Q(department__in=emp.assigned_departments or [emp.department or 'Operations']) & Q(assigned_to__isnull=True))
+    )
+    assigned_dept_active_count = assigned_dept_tasks.filter(status__in=['Pending', 'In Progress']).count()
 
     return JsonResponse({
         'employee': serialize_user(emp),
         'stats': {
-            'total_tasks': total_tasks,
-            'todo_count': todo_count,
+            'total_tasks': total_tasks + assigned_dept_tasks.count(),
+            'todo_count': todo_count + assigned_dept_active_count,
             'in_progress_count': in_progress_count,
             'under_review_count': under_review_count,
-            'completed_count': completed_count,
+            'completed_count': completed_count + assigned_dept_tasks.filter(status='Completed').count(),
             'urgent_count': urgent_count,
             'completion_rate': round((completed_count / total_tasks * 100), 1) if total_tasks else 0,
+            'today_logged_hours': round(today_tracker.total_hours, 1) if today_tracker else 0.0,
+            'today_tracker_status': today_tracker.status if today_tracker else 'Draft',
         },
         'active_tasks': [serialize_task(t) for t in active_tasks],
         'recent_completed': [serialize_task(t) for t in recent_completed],
