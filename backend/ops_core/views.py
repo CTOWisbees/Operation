@@ -1052,29 +1052,28 @@ def api_admin_tasks(request):
         target_assignees = []
 
         if assign_mode == 'everyone':
-            target_assignees = list(OperationUser.objects.filter(role='employee', status='Active'))
+            target_assignees = list(OperationUser.objects.filter(is_active=True))
             if not target_assignees:
-                return JsonResponse({'error': 'No active employees found to assign.'}, status=400)
+                return JsonResponse({'error': 'No active team members found to assign.'}, status=400)
 
         elif assign_mode == 'department':
             target_dept = data.get('target_department', '').strip()
             if not target_dept:
                 return JsonResponse({'error': 'Please select a target department.'}, status=400)
             
-            # Match employees in this department or having it in assigned_departments
-            all_emps = OperationUser.objects.filter(role='employee', status='Active')
+            all_emps = OperationUser.objects.filter(is_active=True)
             target_assignees = [
                 emp for emp in all_emps
                 if emp.department == target_dept or (isinstance(emp.assigned_departments, list) and target_dept in emp.assigned_departments)
             ]
             if not target_assignees:
-                return JsonResponse({'error': f'No active employees found in department "{target_dept}".'}, status=400)
+                return JsonResponse({'error': f'No active team members found in department "{target_dept}".'}, status=400)
 
         elif assign_mode == 'multiple':
             assigned_to_ids = data.get('assigned_to_ids', [])
             if not assigned_to_ids:
                 return JsonResponse({'error': 'Please select at least one assignee.'}, status=400)
-            target_assignees = list(OperationUser.objects.filter(id__in=assigned_to_ids, role='employee'))
+            target_assignees = list(OperationUser.objects.filter(id__in=assigned_to_ids, is_active=True))
             if not target_assignees:
                 return JsonResponse({'error': 'Selected assignees not found.'}, status=400)
 
@@ -1101,11 +1100,27 @@ def api_admin_tasks(request):
             )
             created_tasks.append(task)
 
+            # Also create corresponding DailyAssignedTask for seamless tracker sync
+            try:
+                DailyAssignedTask.objects.create(
+                    title=title,
+                    description=description,
+                    department=assignee.department or 'Operations',
+                    assigned_by=user,
+                    assigned_to=assignee,
+                    task_type='Major' if priority in ['Urgent', 'High'] else 'Minor',
+                    priority=priority,
+                    due_date=deadline,
+                    status='Pending'
+                )
+            except Exception:
+                pass
+
         if len(target_assignees) == 1:
             ActivityLog.objects.create(user=user, action=f"Assigned task '{title}' to {target_assignees[0].name}")
             return JsonResponse({'success': True, 'message': f"Task assigned to {target_assignees[0].name} successfully", 'task': serialize_task(created_tasks[0])})
         else:
-            ActivityLog.objects.create(user=user, action=f"Assigned task '{title}' to {len(target_assignees)} employees ({assign_mode})")
+            ActivityLog.objects.create(user=user, action=f"Assigned task '{title}' to {len(target_assignees)} team members ({assign_mode})")
             return JsonResponse({'success': True, 'message': f"Task broadcasted to {len(target_assignees)} team members successfully!", 'tasks': [serialize_task(t) for t in created_tasks]})
 
 

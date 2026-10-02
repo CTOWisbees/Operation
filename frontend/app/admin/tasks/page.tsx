@@ -213,25 +213,42 @@ export default function AdminTasksPage() {
     }
   };
 
+  const normalizeStatus = (s: string) => {
+    const lower = (s || '').toLowerCase().replace(/[-_]/g, ' ').trim();
+    if (lower === 'todo' || lower === 'to do' || lower === 'pending') return 'Todo';
+    if (lower === 'in progress' || lower === 'active') return 'In Progress';
+    if (lower === 'under review' || lower === 'review' || lower === 'flagged') return 'Under Review';
+    if (lower === 'completed' || lower === 'done' || lower === 'finished') return 'Completed';
+    return 'Todo';
+  };
+
   // Filter Tasks
   const filteredTasks = tasks.filter((t) => {
     const matchesSearch =
-      t.title.toLowerCase().includes(search.toLowerCase()) ||
+      t.title?.toLowerCase().includes(search.toLowerCase()) ||
       (t.description && t.description.toLowerCase().includes(search.toLowerCase())) ||
       (t.assigned_to?.name && t.assigned_to.name.toLowerCase().includes(search.toLowerCase()));
 
     const matchesAssignee = filterAssignee ? String(t.assigned_to?.id) === filterAssignee : true;
-    const matchesDept = filterDept ? t.assigned_to?.department === filterDept : true;
-    const matchesPriority = filterPriority ? t.priority === filterPriority : true;
+    
+    // Check all possible department placements
+    const taskDept = t.assigned_to?.department || t.department || '';
+    const assignedDepts = t.assigned_to?.assigned_departments || [];
+    const matchesDept = filterDept
+      ? (taskDept.toLowerCase() === filterDept.toLowerCase() ||
+         assignedDepts.some((d: string) => d.toLowerCase() === filterDept.toLowerCase()))
+      : true;
+
+    const matchesPriority = filterPriority ? t.priority?.toLowerCase() === filterPriority.toLowerCase() : true;
 
     return matchesSearch && matchesAssignee && matchesDept && matchesPriority;
   });
 
   const columns = [
-    { id: 'Todo', label: 'To Do', border: 'border-slate-300 dark:border-slate-700' },
-    { id: 'In Progress', label: 'In Progress', border: 'border-blue-400 dark:border-blue-800' },
-    { id: 'Under Review', label: 'Under Review', border: 'border-amber-400 dark:border-amber-800' },
-    { id: 'Completed', label: 'Completed', border: 'border-emerald-400 dark:border-emerald-800' },
+    { id: 'Todo', label: 'To Do', border: 'border-slate-300 dark:border-slate-700', badgeColor: 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300' },
+    { id: 'In Progress', label: 'In Progress', border: 'border-blue-400 dark:border-blue-800', badgeColor: 'bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300' },
+    { id: 'Under Review', label: 'Under Review', border: 'border-amber-400 dark:border-amber-800', badgeColor: 'bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-300' },
+    { id: 'Completed', label: 'Completed', border: 'border-emerald-400 dark:border-emerald-800', badgeColor: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-300' },
   ];
 
   return (
@@ -324,9 +341,9 @@ export default function AdminTasksPage() {
           <select
             value={filterDept}
             onChange={(e) => setFilterDept(e.target.value)}
-            className="w-full px-3 py-2 bg-[var(--input-bg)] border border-[var(--card-border)] rounded-xl text-xs font-medium text-[var(--text-primary)] focus:outline-none focus:border-sky-500"
+            className="w-full px-3 py-2 bg-[var(--input-bg)] border border-[var(--card-border)] rounded-xl text-xs font-medium text-[var(--text-primary)] focus:outline-none focus:border-sky-500 cursor-pointer"
           >
-            <option value="">All Departments</option>
+            <option value="">All Departments ({departmentsList.length})</option>
             {departmentsList.map((d) => (
               <option key={d} value={d}>{d}</option>
             ))}
@@ -337,11 +354,11 @@ export default function AdminTasksPage() {
           <select
             value={filterAssignee}
             onChange={(e) => setFilterAssignee(e.target.value)}
-            className="w-full px-3 py-2 bg-[var(--input-bg)] border border-[var(--card-border)] rounded-xl text-xs font-medium text-[var(--text-primary)] focus:outline-none focus:border-sky-500"
+            className="w-full px-3 py-2 bg-[var(--input-bg)] border border-[var(--card-border)] rounded-xl text-xs font-medium text-[var(--text-primary)] focus:outline-none focus:border-sky-500 cursor-pointer"
           >
-            <option value="">All Team Members</option>
+            <option value="">All Team Members ({employees.length})</option>
             {employees.map((emp) => (
-              <option key={emp.id} value={emp.id}>{emp.name} ({emp.department})</option>
+              <option key={emp.id} value={emp.id}>{emp.name || emp.full_name} ({emp.department || 'Operations'})</option>
             ))}
           </select>
         </div>
@@ -350,10 +367,10 @@ export default function AdminTasksPage() {
           <select
             value={filterPriority}
             onChange={(e) => setFilterPriority(e.target.value)}
-            className="w-full px-3 py-2 bg-[var(--input-bg)] border border-[var(--card-border)] rounded-xl text-xs font-medium text-[var(--text-primary)] focus:outline-none focus:border-sky-500"
+            className="w-full px-3 py-2 bg-[var(--input-bg)] border border-[var(--card-border)] rounded-xl text-xs font-medium text-[var(--text-primary)] focus:outline-none focus:border-sky-500 cursor-pointer"
           >
             <option value="">All Priorities</option>
-            <option value="Urgent">Urgent</option>
+            <option value="Urgent">Urgent 🔥</option>
             <option value="High">High</option>
             <option value="Medium">Medium</option>
             <option value="Low">Low</option>
@@ -365,7 +382,7 @@ export default function AdminTasksPage() {
       {viewMode === 'kanban' ? (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 items-start">
           {columns.map((col) => {
-            const colTasks = filteredTasks.filter((t) => t.status === col.id);
+            const colTasks = filteredTasks.filter((t) => normalizeStatus(t.status) === col.id);
             return (
               <div
                 key={col.id}
@@ -375,7 +392,7 @@ export default function AdminTasksPage() {
                 <div className="flex items-center justify-between pb-2 border-b border-[var(--card-border)]">
                   <div className="flex items-center gap-2">
                     <span className="font-black text-xs text-[var(--text-primary)]">{col.label}</span>
-                    <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-[var(--hover-bg)] text-[var(--text-secondary)]">
+                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold ${col.badgeColor}`}>
                       {colTasks.length}
                     </span>
                   </div>
@@ -418,7 +435,29 @@ export default function AdminTasksPage() {
                           )}
                         </div>
 
-                        <div className="pt-2 border-t border-[var(--card-border)] flex items-center justify-between text-[11px]">
+                        {/* Quick Lane Transition Selector */}
+                        <div className="pt-2 border-t border-[var(--card-border)]/60 flex items-center justify-between gap-2">
+                          <select
+                            value={normalizeStatus(t.status)}
+                            onClick={(e) => e.stopPropagation()}
+                            onChange={(e) => {
+                              e.stopPropagation();
+                              handleUpdateStatus(t.id, e.target.value);
+                            }}
+                            className="text-[10px] font-bold py-1 px-2 rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)] text-[var(--text-primary)] focus:outline-none cursor-pointer"
+                          >
+                            <option value="Todo">Move: To Do</option>
+                            <option value="In Progress">Move: In Progress</option>
+                            <option value="Under Review">Move: Review</option>
+                            <option value="Completed">Move: Completed</option>
+                          </select>
+
+                          <span className="text-[10px] font-bold text-[var(--text-muted)] shrink-0">
+                            {t.estimated_hours || 0}h
+                          </span>
+                        </div>
+
+                        <div className="flex items-center justify-between text-[11px] pt-1">
                           <div className="flex items-center gap-1.5 min-w-0 pr-1">
                             <div className="w-5 h-5 rounded-full bg-gradient-to-tr from-sky-600 to-indigo-600 text-white flex items-center justify-center text-[10px] font-black shrink-0">
                               {t.assigned_to?.name ? t.assigned_to.name[0].toUpperCase() : 'U'}
@@ -428,8 +467,8 @@ export default function AdminTasksPage() {
                             </span>
                           </div>
 
-                          <span className="text-[10px] font-bold text-[var(--text-muted)] shrink-0">
-                            {t.estimated_hours}h
+                          <span className="text-[9px] font-extrabold uppercase px-1.5 py-0.5 rounded bg-[var(--sidebar-bg)] text-[var(--text-muted)] border border-[var(--card-border)]">
+                            {t.assigned_to?.department || t.department || 'Operations'}
                           </span>
                         </div>
                       </div>
