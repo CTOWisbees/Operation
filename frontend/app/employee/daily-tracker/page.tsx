@@ -466,14 +466,17 @@ export default function EmployeeDailyTrackerPage() {
             ];
 
         // Ensure 52 weeks fallback if loading
-        const weeksData = heatmap?.weeks || Array.from({ length: 52 }, (_, wIdx) => ({
-          days: Array.from({ length: 7 }, (_, dIdx) => ({
-            date: '',
-            hours: 0,
-            level: 0,
-            status: 'None'
-          }))
-        }));
+        const rawWeeks = heatmap?.weeks || [];
+        const weeksData: any[][] = Array.isArray(rawWeeks) && rawWeeks.length > 0
+          ? rawWeeks.map((w: any) => (Array.isArray(w) ? w : (w?.days || [])))
+          : Array.from({ length: 52 }, () =>
+              Array.from({ length: 7 }, () => ({
+                date: '',
+                hours: 0,
+                level: 0,
+                status: 'None'
+              }))
+            );
 
         return (
           <div className="bg-white dark:bg-[#0d1117] border border-slate-200 dark:border-[#30363d] rounded-2xl p-5 shadow-sm dark:shadow-md relative overflow-hidden text-slate-700 dark:text-slate-300">
@@ -522,41 +525,44 @@ export default function EmployeeDailyTrackerPage() {
 
                   {/* 52 Weeks Grid Columns */}
                   <div className="flex gap-[3.5px]">
-                    {weeksData.map((week: any, wIdx: number) => (
-                      <div key={wIdx} className="flex flex-col gap-[3.5px]">
-                        {week.days.map((day: any, dIdx: number) => {
-                          const isSelected = day.date && day.date === currentDate;
-                          let bgStyle = 'bg-slate-100 dark:bg-[#161b22] border-slate-200/80 dark:border-[#30363d]/50';
+                    {weeksData.map((weekList: any[], wIdx: number) => {
+                      const daysInWeek = Array.isArray(weekList) ? weekList : [];
+                      return (
+                        <div key={wIdx} className="flex flex-col gap-[3.5px]">
+                          {daysInWeek.map((day: any, dIdx: number) => {
+                            const isSelected = day?.date && day.date === currentDate;
+                            let bgStyle = 'bg-slate-100 dark:bg-[#161b22] border-slate-200/80 dark:border-[#30363d]/50';
 
-                          if (day.hours > 0 || day.level > 0) {
-                            if (day.hours >= 9 || day.level === 4) bgStyle = 'bg-[#216e39] dark:bg-[#39d353] border-[#216e39] dark:border-[#39d353]';
-                            else if (day.hours >= 7 || day.level === 3) bgStyle = 'bg-[#30a14e] dark:bg-[#26a641] border-[#30a14e] dark:border-[#26a641]';
-                            else if (day.hours >= 4 || day.level === 2) bgStyle = 'bg-[#40c463] dark:bg-[#006d32] border-[#40c463] dark:border-[#006d32]';
-                            else bgStyle = 'bg-[#9be9a8] dark:bg-[#0e4429] border-[#9be9a8] dark:border-[#0e4429]';
-                          }
+                            if (day?.hours > 0 || day?.level > 0) {
+                              if (day.hours >= 9 || day.level === 4) bgStyle = 'bg-[#216e39] dark:bg-[#39d353] border-[#216e39] dark:border-[#39d353]';
+                              else if (day.hours >= 7 || day.level === 3) bgStyle = 'bg-[#30a14e] dark:bg-[#26a641] border-[#30a14e] dark:border-[#26a641]';
+                              else if (day.hours >= 4 || day.level === 2) bgStyle = 'bg-[#40c463] dark:bg-[#006d32] border-[#40c463] dark:border-[#006d32]';
+                              else bgStyle = 'bg-[#9be9a8] dark:bg-[#0e4429] border-[#9be9a8] dark:border-[#0e4429]';
+                            }
 
-                          return (
-                            <div
-                              key={dIdx}
-                              onClick={() => {
-                                if (day.date) setCurrentDate(day.date);
-                              }}
-                              onMouseEnter={(e) => {
-                                if (day.date) {
-                                  const rect = e.currentTarget.getBoundingClientRect();
-                                  setTooltipPos({ x: rect.left + rect.width / 2, y: rect.top - 8 });
-                                  setHoveredDay(day);
-                                }
-                              }}
-                              onMouseLeave={() => setHoveredDay(null)}
-                              className={`w-[11px] h-[11px] rounded-[2px] border cursor-pointer transition-all ${bgStyle} ${
-                                isSelected ? 'ring-2 ring-emerald-500 ring-offset-1 ring-offset-white dark:ring-offset-[#0d1117] scale-125 z-10' : 'hover:scale-125 hover:border-slate-400 dark:hover:border-white/40'
-                              }`}
-                            />
-                          );
-                        })}
-                      </div>
-                    ))}
+                            return (
+                              <div
+                                key={dIdx}
+                                onClick={() => {
+                                  if (day?.date) setCurrentDate(day.date);
+                                }}
+                                onMouseEnter={(e) => {
+                                  if (day?.date) {
+                                    const rect = e.currentTarget.getBoundingClientRect();
+                                    setTooltipPos({ x: rect.left + rect.width / 2, y: rect.top - 8 });
+                                    setHoveredDay(day);
+                                  }
+                                }}
+                                onMouseLeave={() => setHoveredDay(null)}
+                                className={`w-[11px] h-[11px] rounded-[2px] border cursor-pointer transition-all ${bgStyle} ${
+                                  isSelected ? 'ring-2 ring-emerald-500 ring-offset-1 ring-offset-white dark:ring-offset-[#0d1117] scale-125 z-10' : 'hover:scale-125 hover:border-slate-400 dark:hover:border-white/40'
+                                }`}
+                              />
+                            );
+                          })}
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
 
