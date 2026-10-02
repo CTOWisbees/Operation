@@ -6,10 +6,17 @@ export const getOpsBaseUrl = () => {
   if (process.env.NEXT_PUBLIC_OPS_API_URL) {
     return process.env.NEXT_PUBLIC_OPS_API_URL;
   }
+  if (process.env.NEXT_PUBLIC_API_URL) {
+    return process.env.NEXT_PUBLIC_API_URL;
+  }
   if (activeBaseUrl) {
     return activeBaseUrl;
   }
   if (typeof window !== 'undefined') {
+    const customApiUrl = localStorage.getItem('ops_api_url');
+    if (customApiUrl) {
+      return customApiUrl.endsWith('/api') ? customApiUrl : `${customApiUrl}/api`;
+    }
     if (window.location.hostname.includes('ops.wisbees.com') || window.location.hostname.includes('onrender.com')) {
       return 'https://ops.backend.wisbees.com/api';
     }
