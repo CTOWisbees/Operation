@@ -173,10 +173,17 @@ def serialize_user(user):
     is_mgr = bool(user.is_manager or len(managed_depts) > 0)
     is_super = bool(user.is_superadmin or user.role == 'admin')
 
+    user_name = user.name or user.full_name or ''
+    if not user_name and user.email:
+        user_name = user.email.split('@')[0].replace('.', ' ').title()
+    if not user_name:
+        user_name = 'Team Member'
+    full_name_val = user.full_name or user.name or user_name
+
     return {
         'id': user.id,
-        'name': user.name,
-        'full_name': user.full_name or user.name,
+        'name': user_name,
+        'full_name': full_name_val,
         'email': user.email,
         'role': user.role,
         'is_superadmin': is_super,
@@ -186,7 +193,7 @@ def serialize_user(user):
         'emp_type': user.emp_type or ('Intern' if 'intern' in (user.designation or '').lower() else 'Normal'),
         'phone': user.phone,
         'emp_code': user.emp_code or f"OPS-{user.id:04d}",
-        'designation': user.designation,
+        'designation': user.designation or ('Operations Manager' if is_mgr else 'Operations Specialist'),
         'department': user.department or (depts[0] if depts else 'Operations'),
         'assigned_departments': depts,
         'assigned_modules': modules,
@@ -1206,6 +1213,9 @@ def api_employee_dashboard(request):
         (Q(department__in=emp.assigned_departments or [emp.department or 'Operations']) & Q(assigned_to__isnull=True))
     )
     assigned_dept_active_count = assigned_dept_tasks.filter(status__in=['Pending', 'In Progress']).count()
+
+    active_tasks = my_tasks.filter(status__in=['Todo', 'In Progress', 'Under Review']).order_by('-created_at')[:10]
+    recent_completed = my_tasks.filter(status='Completed').order_by('-updated_at')[:5]
 
     return JsonResponse({
         'employee': serialize_user(emp),
