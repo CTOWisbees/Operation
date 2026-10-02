@@ -183,10 +183,10 @@ export default function EmployeeDailyTrackerPage() {
     setTasks(tasks.filter((_, i) => i !== index));
   };
 
-  const totalHours = tasks.reduce((acc, t) => acc + (Number(t.hours_worked) || 0), 0);
-  const achievementsCount = tasks.filter(t => t.is_achievement).length;
-  const isLocked = status === 'Locked';
-  const isSubmitted = status === 'Submitted';
+  const totalHours = (tasks || []).reduce((acc, t) => acc + (Number(t.hours_worked) || 0), 0);
+  const achievementsCount = (tasks || []).filter(t => t.is_achievement).length;
+  const isLocked = status === 'Locked' || (trackerDay && trackerDay.status === 'Locked');
+  const isSubmitted = status === 'Submitted' || (trackerDay && trackerDay.status === 'Submitted');
 
   const handleSave = async (actionType: 'draft' | 'submit') => {
     setSaving(true);
@@ -445,63 +445,157 @@ export default function EmployeeDailyTrackerPage() {
         </div>
       </div>
 
-      {/* GitHub Activity Heatmap (if provided by backend) */}
-      {heatmap && heatmap.weeks && (
-        <div className="bg-[var(--card-bg)] border border-[var(--card-border)] rounded-2xl p-5 shadow-sm relative">
-          <div className="flex items-center justify-between mb-3">
-            <span className="text-xs font-bold text-[var(--text-primary)]">
-              {heatmap.total_submissions || 0} tracker submissions in the last year
-            </span>
-            <div className="flex items-center gap-3 text-[11px] text-[var(--text-muted)]">
-              <span>🕒 {heatmap.total_hours || 0}h Logged</span>
-              <span>⭐ {heatmap.total_achievements || 0} Achievements</span>
-            </div>
-          </div>
+      {/* GitHub-style Activity Heatmap */}
+      {(() => {
+        // Fallback default months if heatmap not loaded yet
+        const monthsList = heatmap?.months_labels && heatmap.months_labels.length > 0
+          ? heatmap.months_labels
+          : [
+              { name: 'Oct', week_col: 0 },
+              { name: 'Nov', week_col: 4 },
+              { name: 'Dec', week_col: 8 },
+              { name: 'Jan', week_col: 13 },
+              { name: 'Feb', week_col: 17 },
+              { name: 'Mar', week_col: 21 },
+              { name: 'Apr', week_col: 26 },
+              { name: 'May', week_col: 30 },
+              { name: 'Jun', week_col: 35 },
+              { name: 'Jul', week_col: 39 },
+              { name: 'Aug', week_col: 43 },
+              { name: 'Sep', week_col: 48 },
+            ];
 
-          <div className="overflow-x-auto pb-2">
-            <div className="flex gap-1 min-w-[600px]">
-              {heatmap.weeks.map((week: any, wIdx: number) => (
-                <div key={wIdx} className="flex flex-col gap-1">
-                  {week.days.map((day: any, dIdx: number) => {
-                    const isSelected = day.date === currentDate;
-                    let bgClass = 'bg-slate-100 dark:bg-slate-800';
-                    if (day.hours > 0) {
-                      if (day.hours < 4) bgClass = 'bg-emerald-200 dark:bg-emerald-950 text-emerald-800';
-                      else if (day.hours < 8) bgClass = 'bg-emerald-400 dark:bg-emerald-800 text-white';
-                      else bgClass = 'bg-emerald-600 dark:bg-emerald-600 text-white';
-                    }
-                    return (
-                      <div
-                        key={dIdx}
-                        onClick={() => setCurrentDate(day.date)}
-                        onMouseEnter={(e) => {
-                          const rect = e.currentTarget.getBoundingClientRect();
-                          setTooltipPos({ x: rect.left + rect.width / 2, y: rect.top - 8 });
-                          setHoveredDay(day);
-                        }}
-                        onMouseLeave={() => setHoveredDay(null)}
-                        className={`w-3 h-3 rounded-xs cursor-pointer transition ${bgClass} ${
-                          isSelected ? 'ring-2 ring-emerald-500 scale-125 z-10' : 'hover:scale-110'
-                        }`}
-                      />
-                    );
-                  })}
+        // Ensure 52 weeks fallback if loading
+        const weeksData = heatmap?.weeks || Array.from({ length: 52 }, (_, wIdx) => ({
+          days: Array.from({ length: 7 }, (_, dIdx) => ({
+            date: '',
+            hours: 0,
+            level: 0,
+            status: 'None'
+          }))
+        }));
+
+        return (
+          <div className="bg-[#0d1117] border border-[#30363d] rounded-2xl p-5 shadow-md relative overflow-hidden text-slate-300">
+            {/* Header info */}
+            <div className="flex items-center justify-between mb-4 pb-3 border-b border-[#30363d]/60">
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-bold text-white">
+                  {heatmap?.total_submitted_days || heatmap?.total_submissions || 0} tracker contributions in the last year
+                </span>
+                {heatmap?.current_streak > 0 && (
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-amber-500/20 text-amber-400 border border-amber-500/30 flex items-center gap-1">
+                    <Flame className="w-3 h-3" /> {heatmap.current_streak} Day Streak
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-3 text-[11px] text-slate-400">
+                <span>🕒 {heatmap?.total_hours_year || heatmap?.total_hours || 0}h Logged</span>
+                <span>⭐ {heatmap?.total_achievements_year || heatmap?.total_achievements || 0} Achievements</span>
+              </div>
+            </div>
+
+            {/* Heatmap Grid with Day and Month Labels */}
+            <div className="overflow-x-auto pb-2">
+              <div className="inline-flex flex-col min-w-[720px]">
+                {/* Month Labels Header */}
+                <div className="flex text-[11px] text-slate-400 mb-2 pl-9">
+                  {monthsList.map((m: any, idx: number) => (
+                    <div
+                      key={idx}
+                      style={{ width: `${(100 / 12)}%`, minWidth: '52px' }}
+                      className="text-left font-medium"
+                    >
+                      {m.name}
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
-          </div>
 
-          {/* Floating Tooltip */}
-          {hoveredDay && (
-            <div
-              style={{ top: tooltipPos.y, left: tooltipPos.x, transform: 'translate(-50%, -100%)' }}
-              className="fixed z-50 pointer-events-none px-2.5 py-1 bg-slate-900 text-white text-[10px] rounded shadow-lg font-medium whitespace-nowrap"
-            >
-              {hoveredDay.date}: {hoveredDay.hours || 0}h • {hoveredDay.status || 'No entry'}
+                {/* Day Labels & 7-Row Grid */}
+                <div className="flex gap-2">
+                  {/* Day of Week Labels (Mon, Wed, Fri) */}
+                  <div className="flex flex-col justify-between text-[10px] text-slate-400 py-0.5 pr-1 font-medium select-none h-[96px]">
+                    <span className="leading-none">Mon</span>
+                    <span className="leading-none">Wed</span>
+                    <span className="leading-none">Fri</span>
+                  </div>
+
+                  {/* 52 Weeks Grid Columns */}
+                  <div className="flex gap-[3.5px]">
+                    {weeksData.map((week: any, wIdx: number) => (
+                      <div key={wIdx} className="flex flex-col gap-[3.5px]">
+                        {week.days.map((day: any, dIdx: number) => {
+                          const isSelected = day.date && day.date === currentDate;
+                          let bgStyle = 'bg-[#161b22] border-[#30363d]/50';
+
+                          if (day.hours > 0 || day.level > 0) {
+                            if (day.hours >= 9 || day.level === 4) bgStyle = 'bg-[#39d353] border-[#39d353]';
+                            else if (day.hours >= 7 || day.level === 3) bgStyle = 'bg-[#26a641] border-[#26a641]';
+                            else if (day.hours >= 4 || day.level === 2) bgStyle = 'bg-[#006d32] border-[#006d32]';
+                            else bgStyle = 'bg-[#0e4429] border-[#0e4429]';
+                          }
+
+                          return (
+                            <div
+                              key={dIdx}
+                              onClick={() => {
+                                if (day.date) setCurrentDate(day.date);
+                              }}
+                              onMouseEnter={(e) => {
+                                if (day.date) {
+                                  const rect = e.currentTarget.getBoundingClientRect();
+                                  setTooltipPos({ x: rect.left + rect.width / 2, y: rect.top - 8 });
+                                  setHoveredDay(day);
+                                }
+                              }}
+                              onMouseLeave={() => setHoveredDay(null)}
+                              className={`w-[11px] h-[11px] rounded-[2px] border cursor-pointer transition-all ${bgStyle} ${
+                                isSelected ? 'ring-2 ring-emerald-400 ring-offset-1 ring-offset-[#0d1117] scale-125 z-10' : 'hover:scale-125 hover:border-white/40'
+                              }`}
+                            />
+                          );
+                        })}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Footer Legend matching GitHub exactly */}
+                <div className="flex items-center justify-between mt-3 pt-2 text-[11px] text-slate-400">
+                  <a
+                    href="#guidelines"
+                    onClick={(e) => { e.preventDefault(); setShowInfoModal(true); }}
+                    className="hover:text-emerald-400 transition underline underline-offset-2"
+                  >
+                    Learn how we count contributions
+                  </a>
+
+                  <div className="flex items-center gap-1.5">
+                    <span>Less</span>
+                    <div className="w-[10px] h-[10px] rounded-[2px] bg-[#161b22] border border-[#30363d]/50" />
+                    <div className="w-[10px] h-[10px] rounded-[2px] bg-[#0e4429] border border-[#0e4429]" />
+                    <div className="w-[10px] h-[10px] rounded-[2px] bg-[#006d32] border border-[#006d32]" />
+                    <div className="w-[10px] h-[10px] rounded-[2px] bg-[#26a641] border border-[#26a641]" />
+                    <div className="w-[10px] h-[10px] rounded-[2px] bg-[#39d353] border border-[#39d353]" />
+                    <span>More</span>
+                  </div>
+                </div>
+              </div>
             </div>
-          )}
-        </div>
-      )}
+
+            {/* Floating Tooltip */}
+            {hoveredDay && (
+              <div
+                style={{ top: tooltipPos.y, left: tooltipPos.x, transform: 'translate(-50%, -100%)' }}
+                className="fixed z-50 pointer-events-none px-3 py-1.5 bg-[#1f242c] text-white border border-[#30363d] text-[11px] rounded-lg shadow-xl font-medium whitespace-nowrap animate-fadeIn"
+              >
+                <div className="font-bold text-emerald-400">{hoveredDay.date_display || hoveredDay.date}</div>
+                <div className="text-slate-300 text-[10px]">{hoveredDay.hours || 0}h logged • {hoveredDay.status || 'No submission'}</div>
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
       {/* Notifications / Feedback Message */}
       {message && (
