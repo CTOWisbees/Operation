@@ -149,18 +149,18 @@ export const api = {
   },
   post: <T = any, R = AxiosResponse<T>, D = any>(url: string, data?: D, config?: AxiosRequestConfig<D>): Promise<R> => {
     clearApiCache();
-    return rawAxios.post<T, R, D>(url, data, config);
+    return rawAxios.post(url, data, config) as unknown as Promise<R>;
   },
   put: <T = any, R = AxiosResponse<T>, D = any>(url: string, data?: D, config?: AxiosRequestConfig<D>): Promise<R> => {
     clearApiCache();
-    return rawAxios.put<T, R, D>(url, data, config);
+    return rawAxios.put(url, data, config) as unknown as Promise<R>;
   },
   delete: <T = any, R = AxiosResponse<T>, D = any>(url: string, config?: AxiosRequestConfig<D>): Promise<R> => {
     clearApiCache();
-    return rawAxios.delete<T, R, D>(url, config);
+    return rawAxios.delete(url, config) as unknown as Promise<R>;
   },
   patch: <T = any, R = AxiosResponse<T>, D = any>(url: string, data?: D, config?: AxiosRequestConfig<D>): Promise<R> => {
     clearApiCache();
-    return rawAxios.patch<T, R, D>(url, data, config);
+    return rawAxios.patch(url, data, config) as unknown as Promise<R>;
   },
 };

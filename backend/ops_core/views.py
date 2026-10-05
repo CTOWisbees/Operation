@@ -37,6 +37,9 @@ from .models import (
 )
 
 
+from django.core.cache import cache
+
+
 def parse_request_json(request):
     try:
         if request.body:
@@ -44,6 +47,18 @@ def parse_request_json(request):
     except Exception:
         pass
     return {}
+
+
+def invalidate_ops_cache(user_id=None):
+    try:
+        cache.delete('ops_admin_dashboard_data')
+        cache.delete('ops_admin_employees_list')
+        cache.delete('ops_admin_roles_list')
+        cache.delete('ops_admin_managers_list')
+        if user_id:
+            cache.delete(f'ops_emp_dashboard_{user_id}')
+    except Exception:
+        pass
 
 
 def get_current_user(request):
@@ -692,6 +707,7 @@ def api_admin_departments(request):
             page_key=page_key,
             is_active=is_active
         )
+        invalidate_ops_cache()
         ActivityLog.objects.create(user=user, action=f"Created department '{dept.name}'")
         return JsonResponse({
             'success': True,
@@ -749,6 +765,7 @@ def api_admin_department_detail(request, pk):
             dept.is_active = bool(data['is_active'])
         dept.save()
 
+        invalidate_ops_cache()
         ActivityLog.objects.create(user=user, action=f"Updated department '{dept.name}'")
         return JsonResponse({
             'success': True,
@@ -765,6 +782,7 @@ def api_admin_department_detail(request, pk):
     if request.method == 'DELETE':
         dname = dept.name
         dept.delete()
+        invalidate_ops_cache()
         ActivityLog.objects.create(user=user, action=f"Deleted department '{dname}'")
         return JsonResponse({'success': True, 'message': f'Department {dname} deleted successfully'})
 
@@ -783,21 +801,6 @@ def api_admin_department_matrix(request):
     return JsonResponse({
         'catalog': DEPARTMENTS_MODULES_CATALOG
     })
-
-
-from django.core.cache import cache
-
-
-def invalidate_ops_cache(user_id=None):
-    try:
-        cache.delete('ops_admin_dashboard_data')
-        cache.delete('ops_admin_employees_list')
-        cache.delete('ops_admin_roles_list')
-        cache.delete('ops_admin_managers_list')
-        if user_id:
-            cache.delete(f'ops_emp_dashboard_{user_id}')
-    except Exception:
-        pass
 
 
 @csrf_exempt
@@ -964,6 +967,7 @@ def api_admin_employees(request):
             OPUserDepartmentAccess.objects.get_or_create(user=new_emp, department=d, defaults={'is_active': True})
 
         ActivityLog.objects.create(user=user, action=f"Created new employee account for {new_emp.name}")
+        invalidate_ops_cache(new_emp.id)
         return JsonResponse({'success': True, 'message': 'Employee created successfully', 'employee': serialize_user(new_emp)})
 
 
@@ -1053,15 +1057,18 @@ def api_admin_employee_detail(request, pk):
             target_emp.set_password(data.get('new_password') or data.get('password'))
 
         target_emp.save()
+        invalidate_ops_cache(target_emp.id)
         ActivityLog.objects.create(user=admin_user, action=f"Updated details and role scopes for {target_emp.name}")
         return JsonResponse({'success': True, 'message': 'Employee updated successfully', 'employee': serialize_user(target_emp)})
 
     if request.method == 'DELETE':
         name = target_emp.name
+        emp_id = target_emp.id
         # Reassign or clean up assigned tasks before deletion
         WorkTask.objects.filter(assigned_to=target_emp).delete()
         OPUserDepartmentAccess.objects.filter(user=target_emp).delete()
         target_emp.delete()
+        invalidate_ops_cache(emp_id)
         ActivityLog.objects.create(user=admin_user, action=f"Deleted employee account: {name}")
         return JsonResponse({'success': True, 'message': f'Employee {name} deleted successfully'})
 
@@ -1074,11 +1081,16 @@ def api_admin_roles(request):
         return JsonResponse({'error': 'Admin privileges required'}, status=403)
 
     if request.method == 'GET':
+        cache_key = 'ops_admin_roles_list'
+        cached_data = cache.get(cache_key)
+        if cached_data:
+            return JsonResponse(cached_data)
+
         roles = OperationalRole.objects.annotate(
             multi_cnt=Count('members_multi', distinct=True),
             single_cnt=Count('members', distinct=True)
         ).order_by('title')
-        return JsonResponse({
+        res_data = {
             'roles': [{
                 'id': r.id,
                 'title': r.title,
@@ -1090,7 +1102,9 @@ def api_admin_roles(request):
                 'member_count': r.multi_cnt or r.single_cnt,
             } for r in roles],
             'department_catalog': DEPARTMENTS_MODULES_CATALOG,
-        })
+        }
+        cache.set(cache_key, res_data, timeout=30)
+        return JsonResponse(res_data)
 
     if request.method == 'POST':
         data = parse_request_json(request)
@@ -1106,6 +1120,7 @@ def api_admin_roles(request):
             permissions=data.get('permissions', ['view_assigned_work', 'submit_work_logs']),
             responsibilities=data.get('responsibilities', ''),
         )
+        invalidate_ops_cache()
         ActivityLog.objects.create(user=user, action=f"Created operational role: {new_role.title}")
         return JsonResponse({'success': True, 'message': 'Role created successfully', 'role_id': new_role.id})
 
@@ -1218,6 +1233,7 @@ def api_admin_tasks(request):
             except Exception:
                 pass
 
+        invalidate_ops_cache()
         if len(target_assignees) == 1:
             ActivityLog.objects.create(user=user, action=f"Assigned task '{title}' to {target_assignees[0].name}")
             return JsonResponse({'success': True, 'message': f"Task assigned to {target_assignees[0].name} successfully", 'task': serialize_task(created_tasks[0])})
@@ -1271,12 +1287,15 @@ def api_admin_task_detail(request, pk):
             task.completed_at = timezone.now()
 
         task.save()
+        invalidate_ops_cache(task.assigned_to_id)
         ActivityLog.objects.create(user=admin_user, action=f"Updated task '{task.title}'")
         return JsonResponse({'success': True, 'message': 'Task updated successfully', 'task': serialize_task(task)})
 
     if request.method == 'DELETE':
         title = task.title
+        assignee_id = task.assigned_to_id
         task.delete()
+        invalidate_ops_cache(assignee_id)
         ActivityLog.objects.create(user=admin_user, action=f"Deleted task '{title}'")
         return JsonResponse({'success': True, 'message': 'Task deleted successfully'})
 
@@ -1405,6 +1424,7 @@ def api_employee_update_task_status(request, pk):
                 submission_link=submission_link,
             )
 
+        invalidate_ops_cache(emp.id)
         ActivityLog.objects.create(
             user=emp,
             action=f"Updated status of '{task.title}' to {new_status}"
@@ -2298,6 +2318,7 @@ def api_admin_assign_manager(request):
         user=admin_user,
         action=f"Appointed {target_user.name} as Manager of {dept_obj.name} Department"
     )
+    invalidate_ops_cache(target_user.id)
 
     return JsonResponse({
         'success': True,
@@ -2347,6 +2368,7 @@ def api_admin_remove_manager(request):
     target_user.is_manager = len(active_managed_depts) > 0
     target_user.save()
 
+    invalidate_ops_cache(target_user.id)
     ActivityLog.objects.create(
         user=admin_user,
         action=f"Removed manager appointment of {target_user.name} for {dept_name}"
@@ -3133,6 +3155,7 @@ def api_tracker_save(request):
         performed_by_role=performed_role,
         details=f"Tracker {audit_action.lower()} with {len(created_tasks)} tasks, Day Status: {day_status}, Total Hours: {tracker_day.total_hours}h."
     )
+    invalidate_ops_cache(target_user.id)
 
     return JsonResponse({
         'success': True,
