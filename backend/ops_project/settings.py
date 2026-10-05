@@ -81,14 +81,14 @@ if db_url:
                 'PASSWORD': url.password,
                 'HOST': url.hostname,
                 'PORT': url.port or 5432,
-                'CONN_MAX_AGE': 600,
+                'CONN_MAX_AGE': None,
                 'CONN_HEALTH_CHECKS': True,
                 'OPTIONS': {
                     'sslmode': sslmode,
-                    'connect_timeout': 10,
+                    'connect_timeout': 15,
                     'keepalives': 1,
-                    'keepalives_idle': 30,
-                    'keepalives_interval': 10,
+                    'keepalives_idle': 15,
+                    'keepalives_interval': 5,
                     'keepalives_count': 5,
                 },
             }
@@ -108,6 +108,17 @@ else:
             'NAME': BASE_DIR / 'ops.db',
         }
     }
+
+CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+        'LOCATION': 'ops-locmem-cache',
+        'TIMEOUT': 60,
+        'OPTIONS': {
+            'MAX_ENTRIES': 2000
+        }
+    }
+}
 
 
 AUTH_PASSWORD_VALIDATORS = [
