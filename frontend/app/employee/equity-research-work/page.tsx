@@ -24,7 +24,18 @@ import {
   ArrowUpRight,
   ArrowDownRight,
   BookmarkCheck,
-  Building2
+  Building2,
+  UploadCloud,
+  FileUp,
+  FileDown,
+  Sliders,
+  RotateCcw,
+  Save,
+  Database,
+  FolderOpen,
+  History,
+  Calendar,
+  Eye,
 } from 'lucide-react';
 import { getOpsBaseUrl } from '@/lib/api';
 
@@ -117,6 +128,34 @@ const DCF_COLS: PeerCol[] = [
   { id: 303, label: 'Bull Case' },
 ];
 
+function getMetricCellValue(
+  dataMap: Record<string, Record<number | string, string>>,
+  metricKey: string,
+  colId: number,
+  colIndex: number
+): string {
+  if (!dataMap || !dataMap[metricKey]) return '';
+  const row = dataMap[metricKey];
+  if (row[colId] !== undefined && row[colId] !== null && String(row[colId]).trim() !== '') {
+    return String(row[colId]);
+  }
+  if (row[String(colId)] !== undefined && row[String(colId)] !== null && String(row[String(colId)]).trim() !== '') {
+    return String(row[String(colId)]);
+  }
+  const fallbackKey = colIndex + 1;
+  if (row[fallbackKey] !== undefined && row[fallbackKey] !== null && String(row[fallbackKey]).trim() !== '') {
+    return String(row[fallbackKey]);
+  }
+  if (row[String(fallbackKey)] !== undefined && row[String(fallbackKey)] !== null && String(row[String(fallbackKey)]).trim() !== '') {
+    return String(row[String(fallbackKey)]);
+  }
+  const modKey = colId % 100;
+  if (modKey > 0 && row[modKey] !== undefined && row[modKey] !== null && String(row[modKey]).trim() !== '') {
+    return String(row[modKey]);
+  }
+  return '';
+}
+
 // ─── Card Wrapper ─────────────────────────────────────────────
 function Card({ children, className = '' }: { children: React.ReactNode; className?: string }) {
   return (
@@ -133,36 +172,73 @@ function FieldLabel({ children }: { children: React.ReactNode }) {
 const inputCls =
   'w-full px-3 py-2.5 rounded-xl border border-slate-200 dark:border-slate-600 bg-slate-50 dark:bg-slate-900/60 text-[13px] text-slate-800 dark:text-slate-200 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-violet-400 focus:border-violet-400 transition-colors';
 
+// ─── Helper to Read Cached Report State Synchronously on Mount ─
+function getInitialReportData() {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = sessionStorage.getItem('equity_research_report_data') || localStorage.getItem('equity_research_report_data');
+    if (raw) {
+      return JSON.parse(raw);
+    }
+  } catch (err) {
+    console.error('Error reading cached report data:', err);
+  }
+  return null;
+}
+
 // ─── Main Component ───────────────────────────────────────────
 export default function EquityResearchWorkPage() {
   const router = useRouter();
   const [user, setUser] = useState<any>(null);
 
   // ── Target Stock Search & Autocomplete ──
-  const [stockQuery, setStockQuery] = useState('');
-  const [companyName, setCompanyName] = useState('');
+  const [stockQuery, setStockQuery] = useState<string>(() => {
+    const d = getInitialReportData();
+    return d?.stockQuery || d?.companyName || '';
+  });
+  const [companyName, setCompanyName] = useState<string>(() => {
+    const d = getInitialReportData();
+    return d?.companyName || d?.stockQuery || '';
+  });
   const [suggestions, setSuggestions] = useState<any[]>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [fetchingSuggestions, setFetchingSuggestions] = useState(false);
   const [successToast, setSuccessToast] = useState('');
-  const [currentPrice, setCurrentPrice] = useState('');
-  const [priceAsOn, setPriceAsOn] = useState(new Date().toISOString().split('T')[0]);
-  const [targetPrice, setTargetPrice] = useState('');
+  const [currentPrice, setCurrentPrice] = useState<string>(() => {
+    const d = getInitialReportData();
+    return d?.currentPrice || '';
+  });
+  const [priceAsOn, setPriceAsOn] = useState<string>(() => {
+    const d = getInitialReportData();
+    return d?.priceAsOn || new Date().toISOString().split('T')[0];
+  });
+  const [targetPrice, setTargetPrice] = useState<string>(() => {
+    const d = getInitialReportData();
+    return d?.targetPrice || '';
+  });
   const [fetchingPrice, setFetchingPrice] = useState(false);
   const [fetchError, setFetchError] = useState('');
 
   // ── Comparison Mode & Recommendation ──
-  const [compMode, setCompMode] = useState(COMPARISON_MODES[0]);
-  const [recommendation, setRecommendation] = useState('');
+  const [compMode, setCompMode] = useState<string>(() => {
+    const d = getInitialReportData();
+    return d?.compMode || COMPARISON_MODES[0];
+  });
+  const [recommendation, setRecommendation] = useState<string>(() => {
+    const d = getInitialReportData();
+    return d?.recommendation || '';
+  });
 
   // ── Peer Columns & Peer Autocomplete ──
-  const [peers, setPeers] = useState<PeerCol[]>([
-    { id: 1, label: 'Target Company' },
-  ]);
-  const [peerNames, setPeerNames] = useState<Record<number, string>>({
-    1: 'Target Company',
-    2: 'Peer 1',
-    3: 'Peer 2',
+  const [peers, setPeers] = useState<PeerCol[]>(() => {
+    const d = getInitialReportData();
+    if (d?.peers && Array.isArray(d.peers) && d.peers.length > 0) return d.peers;
+    return [{ id: 1, label: 'Target Company' }];
+  });
+  const [peerNames, setPeerNames] = useState<Record<number, string>>(() => {
+    const d = getInitialReportData();
+    if (d?.peerNames && Object.keys(d.peerNames).length > 0) return d.peerNames;
+    return { 1: 'Target Company', 2: 'Peer 1', 3: 'Peer 2' };
   });
   const [peerQuery, setPeerQuery] = useState<Record<number, string>>({});
   const [peerSuggestions, setPeerSuggestions] = useState<Record<number, any[]>>({});
@@ -170,74 +246,139 @@ export default function EquityResearchWorkPage() {
   const [fetchingPeerId, setFetchingPeerId] = useState<number | null>(null);
 
   // ── Metadata ──
-  const [industrySector, setIndustrySector] = useState('');
-  const [timeHorizon, setTimeHorizon] = useState('12 - 24 Months');
+  const [industrySector, setIndustrySector] = useState<string>(() => {
+    const d = getInitialReportData();
+    return d?.industrySector || '';
+  });
+  const [timeHorizon, setTimeHorizon] = useState<string>(() => {
+    const d = getInitialReportData();
+    return d?.timeHorizon || '12 - 24 Months';
+  });
   const [chartFile, setChartFile] = useState<File | null>(null);
   const chartInputRef = useRef<HTMLInputElement>(null);
+  const dropFileInputRef = useRef<HTMLInputElement>(null);
+  const [chartImageData, setChartImageData] = useState<string | null>(() => {
+    const d = getInitialReportData();
+    return d?.chartImageData || null;
+  });
+  const [chartImageMaxHeight, setChartImageMaxHeight] = useState<number>(() => {
+    const d = getInitialReportData();
+    return d?.chartImageMaxHeight ? Number(d.chartImageMaxHeight) : 380;
+  });
+  const [chartImageWidth, setChartImageWidth] = useState<string>(() => {
+    const d = getInitialReportData();
+    return d?.chartImageWidth || '100%';
+  });
+  const [isDraggingReport, setIsDraggingReport] = useState(false);
+
+  // ── Database Saved Reports & History State ──
+  const [currentReportId, setCurrentReportId] = useState<number | null>(() => {
+    const d = getInitialReportData();
+    return d?.reportId ? Number(d.reportId) : null;
+  });
+  const [showHistoryModal, setShowHistoryModal] = useState(false);
+  const [savedReports, setSavedReports] = useState<any[]>([]);
+  const [loadingReports, setLoadingReports] = useState(false);
+  const [savingToDb, setSavingToDb] = useState(false);
+  const [historySearch, setHistorySearch] = useState('');
 
   // ── Mode-specific Metric Table Data ──
-  const [metricsData, setMetricsData] = useState<Record<string, Record<number, string>>>({});
-  const [historicalData, setHistoricalData] = useState<Record<string, Record<number, string>>>({});
-  const [benchmarkData, setBenchmarkData] = useState<Record<string, Record<number, string>>>({});
-  const [dcfData, setDcfData] = useState<Record<string, Record<number, string>>>({});
+  const [metricsData, setMetricsData] = useState<Record<string, Record<number, string>>>(() => {
+    const d = getInitialReportData();
+    return d?.metricsData || {};
+  });
+  const [historicalData, setHistoricalData] = useState<Record<string, Record<number, string>>>(() => {
+    const d = getInitialReportData();
+    return d?.historicalData?.data || d?.historicalData || {};
+  });
+  const [benchmarkData, setBenchmarkData] = useState<Record<string, Record<number, string>>>(() => {
+    const d = getInitialReportData();
+    return d?.benchmarkData?.data || d?.benchmarkData || {};
+  });
+  const [dcfData, setDcfData] = useState<Record<string, Record<number, string>>>(() => {
+    const d = getInitialReportData();
+    return d?.dcfData?.data || d?.dcfData || {};
+  });
 
   // ── Alignment Options ──
-  const [textAlignment, setTextAlignment] = useState<'left' | 'center' | 'right' | 'justify'>('left');
-  const [tableAlignment, setTableAlignment] = useState<'left' | 'center' | 'right'>('center');
+  const [textAlignment, setTextAlignment] = useState<'left' | 'center' | 'right' | 'justify'>(() => {
+    const d = getInitialReportData();
+    return d?.textAlignment || 'left';
+  });
+  const [tableAlignment, setTableAlignment] = useState<'left' | 'center' | 'right'>(() => {
+    const d = getInitialReportData();
+    return d?.tableAlignment || 'center';
+  });
 
   // ── Analyst Notes ──
-  const [businessOverview, setBusinessOverview] = useState('');
-  const [valuationThesis, setValuationThesis] = useState('');
-  const [technicalAnalysis, setTechnicalAnalysis] = useState('');
+  const [businessOverview, setBusinessOverview] = useState<string>(() => {
+    const d = getInitialReportData();
+    return d?.businessOverview || '';
+  });
+  const [valuationThesis, setValuationThesis] = useState<string>(() => {
+    const d = getInitialReportData();
+    return d?.valuationThesis || '';
+  });
+  const [technicalAnalysis, setTechnicalAnalysis] = useState<string>(() => {
+    const d = getInitialReportData();
+    return d?.technicalAnalysis || '';
+  });
 
   // ── Street Coverage Consensus ──
-  const [consensusRows, setConsensusRows] = useState<ConsensusRow[]>([
-    { id: 1, callDate: new Date().toLocaleDateString('en-GB'), brokerageHouse: 'WisBees Institutional Research', rating: 'Buy', targetPrice: '650.00' },
-  ]);
+  const [consensusRows, setConsensusRows] = useState<ConsensusRow[]>(() => {
+    const d = getInitialReportData();
+    if (d?.consensusRows && Array.isArray(d.consensusRows) && d.consensusRows.length > 0) return d.consensusRows;
+    return [{ id: 1, callDate: new Date().toLocaleDateString('en-GB'), brokerageHouse: 'WisBees Institutional Research', rating: 'Buy', targetPrice: '650.00' }];
+  });
 
   const [compiling, setCompiling] = useState(false);
-  const isLoadedRef = useRef(false);
 
-  // ── Load Cached Data on Mount ──
+  // ── Load User & Synchronize Storage ──
   useEffect(() => {
     const savedUser = localStorage.getItem('ops_user');
     if (savedUser) {
       try { setUser(JSON.parse(savedUser)); } catch {}
     }
 
-    try {
-      const cached = sessionStorage.getItem('equity_research_report_data') || localStorage.getItem('equity_research_report_data');
-      if (cached) {
-        const d = JSON.parse(cached);
-        if (d.stockQuery) setStockQuery(d.stockQuery);
-        if (d.companyName) setCompanyName(d.companyName);
-        if (d.currentPrice) setCurrentPrice(d.currentPrice);
-        if (d.priceAsOn) setPriceAsOn(d.priceAsOn);
-        if (d.targetPrice) setTargetPrice(d.targetPrice);
-        if (d.recommendation) setRecommendation(d.recommendation);
-        if (d.compMode) setCompMode(d.compMode);
-        if (d.industrySector) setIndustrySector(d.industrySector);
-        if (d.timeHorizon) setTimeHorizon(d.timeHorizon);
-        if (d.peers && Array.isArray(d.peers) && d.peers.length > 0) setPeers(d.peers);
-        if (d.peerNames && Object.keys(d.peerNames).length > 0) setPeerNames(d.peerNames);
-        if (d.metricsData) setMetricsData(d.metricsData);
-        if (d.historicalData) setHistoricalData(d.historicalData);
-        if (d.benchmarkData) setBenchmarkData(d.benchmarkData);
-        if (d.dcfData) setDcfData(d.dcfData);
-        if (d.textAlignment) setTextAlignment(d.textAlignment);
-        if (d.tableAlignment) setTableAlignment(d.tableAlignment);
-        if (d.businessOverview) setBusinessOverview(d.businessOverview);
-        if (d.valuationThesis) setValuationThesis(d.valuationThesis);
-        if (d.technicalAnalysis) setTechnicalAnalysis(d.technicalAnalysis);
-        if (d.consensusRows && Array.isArray(d.consensusRows) && d.consensusRows.length > 0) {
-          setConsensusRows(d.consensusRows);
+    const syncFromStorage = () => {
+      try {
+        const cached = sessionStorage.getItem('equity_research_report_data') || localStorage.getItem('equity_research_report_data');
+        if (cached) {
+          const d = JSON.parse(cached);
+          if (d.stockQuery !== undefined) setStockQuery(d.stockQuery);
+          if (d.companyName !== undefined) setCompanyName(d.companyName);
+          if (d.currentPrice !== undefined) setCurrentPrice(d.currentPrice);
+          if (d.priceAsOn !== undefined) setPriceAsOn(d.priceAsOn);
+          if (d.targetPrice !== undefined) setTargetPrice(d.targetPrice);
+          if (d.recommendation !== undefined) setRecommendation(d.recommendation);
+          if (d.compMode !== undefined) setCompMode(d.compMode);
+          if (d.industrySector !== undefined) setIndustrySector(d.industrySector);
+          if (d.timeHorizon !== undefined) setTimeHorizon(d.timeHorizon);
+          if (d.peers && Array.isArray(d.peers) && d.peers.length > 0) setPeers(d.peers);
+          if (d.peerNames && Object.keys(d.peerNames).length > 0) setPeerNames(d.peerNames);
+          if (d.metricsData) setMetricsData(d.metricsData);
+          if (d.historicalData) setHistoricalData(d.historicalData?.data || d.historicalData);
+          if (d.benchmarkData) setBenchmarkData(d.benchmarkData?.data || d.benchmarkData);
+          if (d.dcfData) setDcfData(d.dcfData?.data || d.dcfData);
+          if (d.textAlignment) setTextAlignment(d.textAlignment);
+          if (d.tableAlignment) setTableAlignment(d.tableAlignment);
+          if (d.businessOverview !== undefined) setBusinessOverview(d.businessOverview);
+          if (d.valuationThesis !== undefined) setValuationThesis(d.valuationThesis);
+          if (d.technicalAnalysis !== undefined) setTechnicalAnalysis(d.technicalAnalysis);
+          if (d.consensusRows && Array.isArray(d.consensusRows) && d.consensusRows.length > 0) {
+            setConsensusRows(d.consensusRows);
+          }
+          if (d.chartImageData !== undefined) setChartImageData(d.chartImageData);
+          if (d.chartImageMaxHeight !== undefined) setChartImageMaxHeight(Number(d.chartImageMaxHeight));
+          if (d.chartImageWidth !== undefined) setChartImageWidth(d.chartImageWidth);
         }
+      } catch (err) {
+        console.error('Failed to sync storage data:', err);
       }
-    } catch (err) {
-      console.error('Failed to load cached form data:', err);
-    } finally {
-      isLoadedRef.current = true;
-    }
+    };
+
+    window.addEventListener('storage', syncFromStorage);
+    return () => window.removeEventListener('storage', syncFromStorage);
   }, []);
 
   const handleResetForm = () => {
@@ -251,7 +392,11 @@ export default function EquityResearchWorkPage() {
     setIndustrySector('');
     setTimeHorizon('12 - 24 Months');
     setChartFile(null);
+    setChartImageData(null);
+    setChartImageMaxHeight(380);
+    setChartImageWidth('100%');
     if (chartInputRef.current) chartInputRef.current.value = '';
+    if (dropFileInputRef.current) dropFileInputRef.current.value = '';
     setPeers([
       { id: 1, label: 'Target Company' },
     ]);
@@ -273,9 +418,356 @@ export default function EquityResearchWorkPage() {
     setTimeout(() => setSuccessToast(''), 3000);
   };
 
+  // ── Drag & Drop & Load Older Report ──
+  const handleLoadReportFile = (file: File) => {
+    if (!file) return;
+
+    if (file.name.endsWith('.json') || file.type === 'application/json') {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        try {
+          const content = e.target?.result as string;
+          const parsed = JSON.parse(content);
+          const d = parsed.reportData || parsed;
+
+          if (!d.stockQuery && !d.companyName && !d.currentPrice) {
+            alert('The dropped file does not appear to be a valid WisBees Research Dossier JSON.');
+            return;
+          }
+
+          if (d.stockQuery !== undefined) setStockQuery(d.stockQuery);
+          if (d.companyName !== undefined) setCompanyName(d.companyName);
+          if (d.currentPrice !== undefined) setCurrentPrice(d.currentPrice);
+          if (d.priceAsOn !== undefined) setPriceAsOn(d.priceAsOn);
+          if (d.targetPrice !== undefined) setTargetPrice(d.targetPrice);
+          if (d.recommendation !== undefined) setRecommendation(d.recommendation);
+          if (d.compMode !== undefined) setCompMode(d.compMode);
+          if (d.industrySector !== undefined) setIndustrySector(d.industrySector);
+          if (d.timeHorizon !== undefined) setTimeHorizon(d.timeHorizon);
+          if (d.peers && Array.isArray(d.peers) && d.peers.length > 0) setPeers(d.peers);
+          if (d.peerNames && Object.keys(d.peerNames).length > 0) setPeerNames(d.peerNames);
+          if (d.metricsData) setMetricsData(d.metricsData);
+          if (d.historicalData) setHistoricalData(d.historicalData?.data || d.historicalData);
+          if (d.benchmarkData) setBenchmarkData(d.benchmarkData?.data || d.benchmarkData);
+          if (d.dcfData) setDcfData(d.dcfData?.data || d.dcfData);
+          if (d.textAlignment) setTextAlignment(d.textAlignment);
+          if (d.tableAlignment) setTableAlignment(d.tableAlignment);
+          if (d.businessOverview !== undefined) setBusinessOverview(d.businessOverview);
+          if (d.valuationThesis !== undefined) setValuationThesis(d.valuationThesis);
+          if (d.technicalAnalysis !== undefined) setTechnicalAnalysis(d.technicalAnalysis);
+          if (d.consensusRows && Array.isArray(d.consensusRows) && d.consensusRows.length > 0) {
+            setConsensusRows(d.consensusRows);
+          }
+          if (d.chartImageData !== undefined) setChartImageData(d.chartImageData);
+          if (d.chartImageMaxHeight !== undefined) setChartImageMaxHeight(Number(d.chartImageMaxHeight));
+          if (d.chartImageWidth !== undefined) setChartImageWidth(d.chartImageWidth);
+
+          try {
+            const serialized = JSON.stringify(d);
+            sessionStorage.setItem('equity_research_report_data', serialized);
+            localStorage.setItem('equity_research_report_data', serialized);
+          } catch {}
+
+          setSuccessToast(`Restored report dossier for ${d.companyName || d.stockQuery}! You can now edit.`);
+          setTimeout(() => setSuccessToast(''), 4500);
+        } catch (err: any) {
+          console.error('Error parsing report json:', err);
+          alert('Could not parse report file. Please ensure it is a valid JSON dossier.');
+        }
+      };
+      reader.readAsText(file);
+    } else if (file.type.startsWith('image/')) {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const result = e.target?.result as string;
+        setChartImageData(result);
+        setChartFile(file);
+        setSuccessToast(`Uploaded chart image (${file.name}). Adjust resizing options in Card 5.`);
+        setTimeout(() => setSuccessToast(''), 4000);
+      };
+      reader.readAsDataURL(file);
+    } else {
+      alert('Unsupported file format. Please drop a .json report dossier or a chart image file.');
+    }
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDraggingReport(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDraggingReport(false);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDraggingReport(false);
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      handleLoadReportFile(e.dataTransfer.files[0]);
+    }
+  };
+
+  // ── Export Dossier JSON ──
+  const handleExportReportJson = () => {
+    const payload = {
+      stockQuery,
+      companyName: companyName || stockQuery || 'Target Company',
+      currentPrice,
+      priceAsOn,
+      targetPrice,
+      recommendation,
+      compMode,
+      industrySector,
+      timeHorizon,
+      peers,
+      peerNames,
+      metricsData,
+      historicalData,
+      benchmarkData,
+      dcfData,
+      textAlignment,
+      tableAlignment,
+      businessOverview,
+      valuationThesis,
+      technicalAnalysis,
+      consensusRows,
+      chartImageData,
+      chartImageMaxHeight,
+      chartImageWidth,
+      exportedAt: new Date().toISOString(),
+    };
+
+    const fileName = `WISBEES_REPORT_${(companyName || stockQuery || 'DOSSIER').replace(/[^a-zA-Z0-9]/g, '_')}_${new Date().toISOString().split('T')[0]}.json`;
+    const jsonStr = JSON.stringify(payload, null, 2);
+    const blob = new Blob([jsonStr], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+
+    setSuccessToast(`Exported dossier backup as ${fileName}`);
+    setTimeout(() => setSuccessToast(''), 4000);
+  };
+
+  // ── Fetch Saved Reports from Database ──
+  const handleFetchSavedReports = async (query = '') => {
+    setLoadingReports(true);
+    try {
+      const baseUrl = getOpsBaseUrl().replace(/\/$/, '');
+      const token = localStorage.getItem('ops_token');
+      const res = await fetch(`${baseUrl}/ia/reports?q=${encodeURIComponent(query)}`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'X-User-Auth': token || '',
+        },
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setSavedReports(data.reports || []);
+      }
+    } catch (err) {
+      console.error('Failed to fetch saved reports:', err);
+    } finally {
+      setLoadingReports(false);
+    }
+  };
+
+  // ── Save Current Report to Database ──
+  const handleSaveReportToDatabase = async () => {
+    if (!stockQuery.trim() && !companyName.trim()) {
+      alert('Please enter a target stock name or ticker before saving to database.');
+      return;
+    }
+    setSavingToDb(true);
+    try {
+      const baseUrl = getOpsBaseUrl().replace(/\/$/, '');
+      const token = localStorage.getItem('ops_token');
+      const payload = {
+        report_id: currentReportId,
+        stockQuery: stockQuery.trim(),
+        companyName: companyName || stockQuery || 'Target Company',
+        currentPrice: currentPrice || '',
+        priceAsOn: priceAsOn || new Date().toISOString().split('T')[0],
+        targetPrice: targetPrice || '',
+        recommendation,
+        compMode,
+        industrySector: industrySector || 'Equities & Advisory',
+        timeHorizon: timeHorizon || '12 - 24 Months',
+        peers,
+        peerNames,
+        metricsData,
+        historicalData,
+        benchmarkData,
+        dcfData,
+        textAlignment,
+        tableAlignment,
+        businessOverview,
+        valuationThesis,
+        technicalAnalysis,
+        consensusRows,
+        chartImageData,
+        chartImageMaxHeight,
+        chartImageWidth,
+        userName: user?.name || user?.email || 'WisBees Analyst',
+      };
+
+      const res = await fetch(`${baseUrl}/ia/reports/save`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+          'X-User-Auth': token || '',
+        },
+        body: JSON.stringify(payload),
+      });
+      const result = await res.json();
+      if (!res.ok || !result.success) {
+        throw new Error(result.error || 'Failed to save report to database');
+      }
+
+      const savedId = result.report_id;
+      setCurrentReportId(savedId);
+
+      // Update storage with reportId
+      try {
+        const cached = sessionStorage.getItem('equity_research_report_data') || localStorage.getItem('equity_research_report_data');
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          parsed.reportId = savedId;
+          sessionStorage.setItem('equity_research_report_data', JSON.stringify(parsed));
+          localStorage.setItem('equity_research_report_data', JSON.stringify(parsed));
+        }
+      } catch {}
+
+      setSuccessToast(`Report for ${companyName || stockQuery} saved to database successfully (ID: #${savedId})!`);
+      setTimeout(() => setSuccessToast(''), 4500);
+    } catch (err: any) {
+      console.error('Error saving report to DB:', err);
+      alert(err.message || 'Error saving report to database. Please check your connection.');
+    } finally {
+      setSavingToDb(false);
+    }
+  };
+
+  // ── Load a Specific Saved Report from Database ──
+  const handleLoadSavedReport = async (reportId: number, navigateToReport = false) => {
+    try {
+      const baseUrl = getOpsBaseUrl().replace(/\/$/, '');
+      const token = localStorage.getItem('ops_token');
+      const res = await fetch(`${baseUrl}/ia/reports/${reportId}`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'X-User-Auth': token || '',
+        },
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'Failed to load report from database');
+      }
+
+      const rep = data.report;
+      const d = rep.report_data || {};
+
+      setCurrentReportId(rep.id);
+      if (d.stockQuery !== undefined || rep.symbol) setStockQuery(d.stockQuery || rep.symbol);
+      if (d.companyName !== undefined || rep.company_name) setCompanyName(d.companyName || rep.company_name);
+      if (d.currentPrice !== undefined || rep.current_price) setCurrentPrice(d.currentPrice || rep.current_price);
+      if (d.priceAsOn !== undefined) setPriceAsOn(d.priceAsOn);
+      if (d.targetPrice !== undefined || rep.target_price) setTargetPrice(d.targetPrice || rep.target_price);
+      if (d.recommendation !== undefined || rep.recommendation) setRecommendation(d.recommendation || rep.recommendation);
+      if (d.compMode !== undefined || rep.comp_mode) setCompMode(d.compMode || rep.comp_mode);
+      if (d.industrySector !== undefined || rep.sector) setIndustrySector(d.industrySector || rep.sector);
+      if (d.timeHorizon !== undefined || rep.time_horizon) setTimeHorizon(d.timeHorizon || rep.time_horizon);
+      if (d.peers && Array.isArray(d.peers) && d.peers.length > 0) setPeers(d.peers);
+      if (d.peerNames && Object.keys(d.peerNames).length > 0) setPeerNames(d.peerNames);
+      if (d.metricsData) setMetricsData(d.metricsData);
+      if (d.historicalData) setHistoricalData(d.historicalData?.data || d.historicalData);
+      if (d.benchmarkData) setBenchmarkData(d.benchmarkData?.data || d.benchmarkData);
+      if (d.dcfData) setDcfData(d.dcfData?.data || d.dcfData);
+      if (d.textAlignment) setTextAlignment(d.textAlignment);
+      if (d.tableAlignment) setTableAlignment(d.tableAlignment);
+      if (d.businessOverview !== undefined) setBusinessOverview(d.businessOverview);
+      if (d.valuationThesis !== undefined) setValuationThesis(d.valuationThesis);
+      if (d.technicalAnalysis !== undefined) setTechnicalAnalysis(d.technicalAnalysis);
+      if (d.consensusRows && Array.isArray(d.consensusRows) && d.consensusRows.length > 0) {
+        setConsensusRows(d.consensusRows);
+      }
+      if (d.chartImageData !== undefined) setChartImageData(d.chartImageData);
+      if (d.chartImageMaxHeight !== undefined) setChartImageMaxHeight(Number(d.chartImageMaxHeight));
+      if (d.chartImageWidth !== undefined) setChartImageWidth(d.chartImageWidth);
+
+      // Store in browser
+      try {
+        const fullPayload = { ...d, reportId: rep.id };
+        sessionStorage.setItem('equity_research_report_data', JSON.stringify(fullPayload));
+        localStorage.setItem('equity_research_report_data', JSON.stringify(fullPayload));
+      } catch {}
+
+      setShowHistoryModal(false);
+      setSuccessToast(`Loaded report #${rep.id} (${rep.company_name}) from database!`);
+      setTimeout(() => setSuccessToast(''), 4500);
+
+      if (navigateToReport) {
+        router.push('/employee/equity-research-work/report');
+      }
+    } catch (err: any) {
+      console.error('Error loading report:', err);
+      alert(err.message || 'Error loading report from database.');
+    }
+  };
+
+  // ── Delete a Saved Report ──
+  const handleDeleteSavedReport = async (reportId: number, compName: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!confirm(`Are you sure you want to delete the saved report for "${compName}" (#${reportId}) from database?`)) {
+      return;
+    }
+    try {
+      const baseUrl = getOpsBaseUrl().replace(/\/$/, '');
+      const token = localStorage.getItem('ops_token');
+      const res = await fetch(`${baseUrl}/ia/reports/${reportId}/delete`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'X-User-Auth': token || '',
+        },
+      });
+      if (res.ok) {
+        setSavedReports(prev => prev.filter(r => r.id !== reportId));
+        if (currentReportId === reportId) {
+          setCurrentReportId(null);
+        }
+        setSuccessToast(`Deleted report #${reportId} for ${compName}`);
+        setTimeout(() => setSuccessToast(''), 3000);
+      }
+    } catch (err) {
+      console.error('Error deleting report:', err);
+    }
+  };
+
   // ── Continuous Auto-Save to Prevent Data Vanishing ──
   useEffect(() => {
-    if (!isLoadedRef.current) return;
+    // CRITICAL GUARD: Never auto-save an empty form over existing cached data!
+    const hasData =
+      Boolean(stockQuery.trim()) ||
+      Boolean(companyName.trim()) ||
+      Boolean(currentPrice.trim()) ||
+      Object.keys(metricsData).length > 0 ||
+      Object.keys(historicalData).length > 0;
+
+    if (!hasData) {
+      return;
+    }
+
     const timeout = setTimeout(() => {
       const payload = {
         stockQuery,
@@ -299,10 +791,22 @@ export default function EquityResearchWorkPage() {
         valuationThesis,
         technicalAnalysis,
         consensusRows,
+        chartImageData,
+        chartImageMaxHeight,
+        chartImageWidth,
       };
       try {
-        localStorage.setItem('equity_research_report_data', JSON.stringify(payload));
-        sessionStorage.setItem('equity_research_report_data', JSON.stringify(payload));
+        try {
+          const serialized = JSON.stringify(payload);
+          localStorage.setItem('equity_research_report_data', serialized);
+          sessionStorage.setItem('equity_research_report_data', serialized);
+        } catch {
+          // If QuotaExceededError, store without large image data
+          const { chartImageData: _img, ...safePayload } = payload;
+          const safeStr = JSON.stringify(safePayload);
+          localStorage.setItem('equity_research_report_data', safeStr);
+          sessionStorage.setItem('equity_research_report_data', safeStr);
+        }
       } catch (err) {
         console.error('Auto-save error:', err);
       }
@@ -331,6 +835,9 @@ export default function EquityResearchWorkPage() {
     valuationThesis,
     technicalAnalysis,
     consensusRows,
+    chartImageData,
+    chartImageMaxHeight,
+    chartImageWidth,
   ]);
 
   // ── Target Stock Autocomplete Search ──
@@ -445,8 +952,12 @@ export default function EquityResearchWorkPage() {
         throw new Error(data.error || 'Failed to fetch stock data');
       }
 
-      if (data.stockQuery) setStockQuery(data.stockQuery);
-      if (data.companyName) setCompanyName(data.companyName);
+      if (data.companyName) {
+        setCompanyName(data.companyName);
+        setStockQuery(data.companyName);
+      } else if (data.stockQuery) {
+        setStockQuery(data.stockQuery);
+      }
       if (data.currentPrice) setCurrentPrice(data.currentPrice);
       if (data.priceAsOn) setPriceAsOn(data.priceAsOn);
       if (data.targetPrice) setTargetPrice(data.targetPrice);
@@ -537,26 +1048,24 @@ export default function EquityResearchWorkPage() {
 
   // ── Metric Value Setter ──
   const setMetric = (metricKey: string, colId: number, value: string) => {
+    const modKey = colId % 100;
+    const updater = (prev: Record<string, Record<number, string>>) => ({
+      ...prev,
+      [metricKey]: {
+        ...(prev[metricKey] || {}),
+        [colId]: value,
+        ...(modKey > 0 ? { [modKey]: value } : {}),
+      },
+    });
+
     if (compMode.includes('Historical')) {
-      setHistoricalData(prev => ({
-        ...prev,
-        [metricKey]: { ...(prev[metricKey] || {}), [colId]: value },
-      }));
+      setHistoricalData(updater);
     } else if (compMode.includes('Benchmark')) {
-      setBenchmarkData(prev => ({
-        ...prev,
-        [metricKey]: { ...(prev[metricKey] || {}), [colId]: value },
-      }));
+      setBenchmarkData(updater);
     } else if (compMode.includes('DCF')) {
-      setDcfData(prev => ({
-        ...prev,
-        [metricKey]: { ...(prev[metricKey] || {}), [colId]: value },
-      }));
+      setDcfData(updater);
     } else {
-      setMetricsData(prev => ({
-        ...prev,
-        [metricKey]: { ...(prev[metricKey] || {}), [colId]: value },
-      }));
+      setMetricsData(updater);
     }
   };
 
@@ -616,7 +1125,7 @@ export default function EquityResearchWorkPage() {
   const handleCompile = () => {
     setCompiling(true);
 
-    const proceed = (chartImageData: string | null) => {
+    const proceed = (finalChartImage: string | null) => {
       const payload = {
         stockQuery: stockQuery.trim(),
         companyName: companyName || stockQuery.replace('.NS', '').replace('.BO', '') || 'Target Company',
@@ -639,7 +1148,9 @@ export default function EquityResearchWorkPage() {
         valuationThesis,
         technicalAnalysis,
         consensusRows,
-        chartImageData,
+        chartImageData: finalChartImage,
+        chartImageMaxHeight,
+        chartImageWidth,
       };
 
       try {
@@ -654,11 +1165,15 @@ export default function EquityResearchWorkPage() {
 
     if (chartFile) {
       const reader = new FileReader();
-      reader.onload = () => proceed(reader.result as string);
-      reader.onerror = () => proceed(null);
+      reader.onload = () => {
+        const result = reader.result as string;
+        setChartImageData(result);
+        proceed(result);
+      };
+      reader.onerror = () => proceed(chartImageData);
       reader.readAsDataURL(chartFile);
     } else {
-      proceed(null);
+      proceed(chartImageData);
     }
   };
 
@@ -687,8 +1202,16 @@ export default function EquityResearchWorkPage() {
     activeDataMap = dcfData;
   }
 
+  const tableAlignCls = tableAlignment === 'left' ? 'text-left' : tableAlignment === 'right' ? 'text-right' : 'text-center';
+  const textAlignCls = textAlignment === 'left' ? 'text-left' : textAlignment === 'center' ? 'text-center' : textAlignment === 'right' ? 'text-right' : 'text-justify';
+
   return (
-    <div className="space-y-5 max-w-4xl mx-auto animate-fadeIn pb-16">
+    <div
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+      className="space-y-5 max-w-4xl mx-auto animate-fadeIn pb-16 relative"
+    >
 
       {/* ── Top Workspace Navigation Tabs ── */}
       <div className="flex flex-wrap items-center justify-between gap-4 p-2 bg-slate-100/80 dark:bg-slate-800/80 backdrop-blur-md rounded-2xl border border-slate-200 dark:border-slate-700">
@@ -749,7 +1272,37 @@ export default function EquityResearchWorkPage() {
               )}
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
+            <button
+              type="button"
+              onClick={handleSaveReportToDatabase}
+              disabled={savingToDb}
+              title="Save or update this report in the cloud database"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-emerald-300 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/40 text-[11px] font-extrabold text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100 transition-colors shadow-xs cursor-pointer disabled:opacity-50"
+            >
+              <Database className={`w-3.5 h-3.5 ${savingToDb ? 'animate-spin' : ''}`} />
+              {savingToDb ? 'Saving to DB…' : currentReportId ? `Update in DB (#${currentReportId})` : 'Save to DB'}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setShowHistoryModal(true);
+                handleFetchSavedReports();
+              }}
+              title="Browse and load previously saved reports from database"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-violet-200 dark:border-violet-800 bg-violet-50/60 dark:bg-violet-950/30 text-[11px] font-bold text-violet-700 dark:text-violet-300 hover:bg-violet-100 transition-colors cursor-pointer"
+            >
+              <History className="w-3.5 h-3.5 text-violet-600 dark:text-violet-400" />
+              <span>Saved Reports</span>
+            </button>
+            <button
+              type="button"
+              onClick={handleExportReportJson}
+              title="Download full report dossier backup as JSON"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-[11px] font-bold text-slate-700 dark:text-slate-300 hover:bg-slate-100 transition-colors cursor-pointer"
+            >
+              <FileDown className="w-3.5 h-3.5" /> Export (.json)
+            </button>
             <button
               type="button"
               onClick={handleResetForm}
@@ -765,13 +1318,47 @@ export default function EquityResearchWorkPage() {
             >
               <FileText className="w-3.5 h-3.5" /> View Current Report
             </button>
-            <span className="flex items-center gap-1 px-3 py-1.5 rounded-xl border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 text-[11px] font-bold text-amber-700 dark:text-amber-400">
-              <Zap className="w-3 h-3" /> Live Fetch Available
-            </span>
           </div>
         </div>
 
         <div className="p-5 space-y-4">
+
+          {/* Drag & Drop Zone for Older Reports & Chart Images */}
+          <div
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+            onDrop={handleDrop}
+            onClick={() => dropFileInputRef.current?.click()}
+            className={`relative border-2 border-dashed rounded-2xl p-4 sm:p-5 transition-all text-center cursor-pointer select-none ${
+              isDraggingReport
+                ? 'border-violet-500 bg-violet-100/70 dark:bg-violet-950/60 scale-[1.01] shadow-lg ring-4 ring-violet-500/20'
+                : 'border-slate-300 dark:border-slate-700 bg-gradient-to-r from-violet-50/30 via-slate-50/50 to-indigo-50/30 dark:from-slate-900/40 dark:via-slate-800/40 dark:to-slate-900/40 hover:border-violet-400 dark:hover:border-violet-500'
+            }`}
+          >
+            <input
+              ref={dropFileInputRef}
+              type="file"
+              accept=".json,image/*"
+              onChange={e => {
+                const f = e.target.files?.[0];
+                if (f) handleLoadReportFile(f);
+              }}
+              className="hidden"
+            />
+            <div className="flex flex-col items-center justify-center gap-1.5">
+              <div className="w-10 h-10 rounded-xl bg-violet-100 dark:bg-violet-950/60 text-violet-600 dark:text-violet-400 flex items-center justify-center shadow-xs">
+                <UploadCloud className="w-5 h-5 text-violet-600 dark:text-violet-400" />
+              </div>
+              <div>
+                <span className="text-xs sm:text-sm font-extrabold text-slate-800 dark:text-slate-100">
+                  Drag & Drop Older Generated Report (.json) or Chart Image here
+                </span>
+                <span className="block text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                  Drop any previously generated WisBees report file to restore all metrics and edit, or click to browse
+                </span>
+              </div>
+            </div>
+          </div>
 
           {/* Success Toast */}
           {successToast && (
@@ -823,7 +1410,7 @@ export default function EquityResearchWorkPage() {
                         key={idx}
                         type="button"
                         onClick={() => {
-                          setStockQuery(s.symbol);
+                          setStockQuery(s.name);
                           setCompanyName(s.name);
                           setShowSuggestions(false);
                           handleFetchStockData(s.symbol);
@@ -1084,28 +1671,147 @@ export default function EquityResearchWorkPage() {
                 />
               </div>
               <div>
-                <FieldLabel>Upload Chart</FieldLabel>
+                <FieldLabel>Upload Technical Chart</FieldLabel>
                 <div className="flex items-center gap-2 px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-600 bg-slate-50 dark:bg-slate-900/60">
                   <label
                     htmlFor="er-chart-file"
                     className="cursor-pointer px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 text-[11px] font-bold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors select-none shrink-0"
                   >
-                    Choose File
+                    {chartImageData ? 'Replace Image' : 'Choose File'}
                   </label>
                   <span className="text-[11px] text-slate-400 truncate">
-                    {chartFile ? chartFile.name : 'No file chosen'}
+                    {chartFile ? chartFile.name : chartImageData ? 'Chart Image Loaded' : 'No file chosen'}
                   </span>
                   <input
                     ref={chartInputRef}
                     id="er-chart-file"
                     type="file"
                     accept="image/*,.pdf"
-                    onChange={e => setChartFile(e.target.files?.[0] || null)}
+                    onChange={e => {
+                      const file = e.target.files?.[0];
+                      if (file) {
+                        setChartFile(file);
+                        if (file.type.startsWith('image/')) {
+                          const reader = new FileReader();
+                          reader.onload = ev => setChartImageData(ev.target?.result as string);
+                          reader.readAsDataURL(file);
+                        }
+                      }
+                    }}
                     className="hidden"
                   />
                 </div>
               </div>
             </div>
+
+            {/* Live Chart Image Resizing & Display Controls */}
+            {chartImageData && (
+              <div className="mt-4 pt-4 border-t border-slate-200 dark:border-slate-700 animate-fadeIn">
+                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mb-3">
+                  <div className="flex items-center gap-2">
+                    <Sliders className="w-4 h-4 text-violet-500" />
+                    <span className="text-xs font-bold text-slate-800 dark:text-slate-200">
+                      Chart Image Size & Display Adjustments
+                    </span>
+                  </div>
+
+                  <div className="flex items-center gap-2 flex-wrap">
+                    {/* Width Presets */}
+                    <div className="flex items-center gap-1 bg-slate-100 dark:bg-slate-900/80 p-1 rounded-xl border border-slate-200 dark:border-slate-700 text-[10px]">
+                      <span className="font-bold text-slate-400 px-1.5">Width:</span>
+                      {(['50%', '75%', '100%'] as const).map(w => (
+                        <button
+                          key={w}
+                          type="button"
+                          onClick={() => setChartImageWidth(w)}
+                          className={`px-2 py-0.5 rounded-lg font-bold transition cursor-pointer ${
+                            chartImageWidth === w
+                              ? 'bg-violet-600 text-white shadow-xs'
+                              : 'text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
+                          }`}
+                        >
+                          {w}
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* Reset Button */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setChartImageMaxHeight(380);
+                        setChartImageWidth('100%');
+                      }}
+                      title="Reset to 380px height & 100% width"
+                      className="flex items-center gap-1 px-2.5 py-1 rounded-xl bg-slate-100 dark:bg-slate-700/60 text-slate-600 dark:text-slate-300 hover:bg-slate-200 text-[11px] font-bold transition cursor-pointer"
+                    >
+                      <RotateCcw className="w-3 h-3" /> Reset Size
+                    </button>
+
+                    {/* Remove Button */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setChartImageData(null);
+                        setChartFile(null);
+                        if (chartInputRef.current) chartInputRef.current.value = '';
+                      }}
+                      className="flex items-center gap-1 px-2.5 py-1 rounded-xl bg-red-50 dark:bg-red-950/30 text-red-600 dark:text-red-400 hover:bg-red-100 text-[11px] font-bold transition cursor-pointer"
+                    >
+                      <Trash2 className="w-3 h-3" /> Remove Chart
+                    </button>
+                  </div>
+                </div>
+
+                {/* Height Slider */}
+                <div className="flex items-center gap-4 bg-slate-50 dark:bg-slate-900/40 p-3 rounded-xl border border-slate-200 dark:border-slate-700 mb-3">
+                  <span className="text-[11px] font-bold text-slate-500 shrink-0">
+                    Max Height: <span className="text-violet-600 dark:text-violet-400 font-extrabold">{chartImageMaxHeight}px</span>
+                  </span>
+                  <input
+                    type="range"
+                    min={150}
+                    max={650}
+                    step={10}
+                    value={chartImageMaxHeight}
+                    onChange={e => setChartImageMaxHeight(Number(e.target.value))}
+                    className="w-full accent-violet-600 cursor-pointer"
+                  />
+                  <div className="flex items-center gap-1 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => setChartImageMaxHeight(h => Math.max(150, h - 25))}
+                      className="px-2 py-0.5 rounded bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 text-[10px] font-bold cursor-pointer"
+                    >
+                      -25px
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setChartImageMaxHeight(h => Math.min(650, h + 25))}
+                      className="px-2 py-0.5 rounded bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 text-[10px] font-bold cursor-pointer"
+                    >
+                      +25px
+                    </button>
+                  </div>
+                </div>
+
+                {/* Scaled Preview Box */}
+                <div className="p-3 bg-slate-100/60 dark:bg-slate-900/60 rounded-xl border border-slate-200 dark:border-slate-700 flex flex-col items-center justify-center overflow-hidden">
+                  <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-2">Live Scaled Preview</div>
+                  <div
+                    className="flex items-center justify-center transition-all duration-150"
+                    style={{ width: chartImageWidth }}
+                  >
+                    <img
+                      src={chartImageData}
+                      alt="Chart preview"
+                      style={{ maxHeight: `${chartImageMaxHeight}px` }}
+                      className="w-auto max-w-full object-contain rounded-lg border border-slate-300 dark:border-slate-600 shadow-sm"
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
           </Card>
 
           {/* ── 6. Dynamic Metrics Dimension Table ───────── */}
@@ -1155,11 +1861,12 @@ export default function EquityResearchWorkPage() {
                     {activeCols.map((col, idx) => (
                       <th
                         key={col.id}
-                        className={`px-4 py-3 font-extrabold text-slate-700 dark:text-slate-200 uppercase tracking-wider text-[11px] text-${tableAlignment}`}
+                        style={{ textAlign: tableAlignment }}
+                        className={`px-4 py-3 font-extrabold text-slate-700 dark:text-slate-200 uppercase tracking-wider text-[11px] ${tableAlignCls}`}
                       >
                         {compMode.includes('Peer')
                           ? peerNames[col.id] || (idx === 0 ? companyName || 'Target Company' : col.label)
-                          : col.label}
+                          : (compMode.includes('Benchmark') && idx === 0 ? (companyName || 'Target Company') + ' (Target)' : col.label)}
                       </th>
                     ))}
                   </tr>
@@ -1170,14 +1877,15 @@ export default function EquityResearchWorkPage() {
                       <td className="px-4 py-3 font-bold text-slate-700 dark:text-slate-300 text-[12px]">
                         {m.label}
                       </td>
-                      {activeCols.map((col) => (
+                      {activeCols.map((col, idx) => (
                         <td key={col.id} className="px-3 py-2">
                           <input
                             type="text"
-                            value={activeDataMap[m.key]?.[col.id] || ''}
+                            value={getMetricCellValue(activeDataMap, m.key, col.id, idx)}
                             onChange={e => setMetric(m.key, col.id, e.target.value)}
                             placeholder={`Enter ${m.label.split(' ')[0]}...`}
-                            className={`w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-600 bg-slate-50 dark:bg-slate-900/40 text-[12px] text-slate-700 dark:text-slate-300 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-violet-400 transition-colors text-${tableAlignment}`}
+                            style={{ textAlign: tableAlignment }}
+                            className={`w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-600 bg-slate-50 dark:bg-slate-900/40 text-[12px] text-slate-700 dark:text-slate-300 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-violet-400 transition-colors ${tableAlignCls}`}
                           />
                         </td>
                       ))}
@@ -1255,7 +1963,7 @@ export default function EquityResearchWorkPage() {
                   onChange={e => setBusinessOverview(e.target.value)}
                   placeholder="Enter business model, key clients, and structural moat..."
                   style={{ textAlign: textAlignment }}
-                  className={`${inputCls} resize-y`}
+                  className={`${inputCls} resize-y ${textAlignCls}`}
                 />
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -1268,7 +1976,7 @@ export default function EquityResearchWorkPage() {
                     onChange={e => setValuationThesis(e.target.value)}
                     placeholder="Enter valuation rationale, P/E multiple discount, target upside..."
                     style={{ textAlign: textAlignment }}
-                    className={`${inputCls} resize-y`}
+                    className={`${inputCls} resize-y ${textAlignCls}`}
                   />
                 </div>
                 <div>
@@ -1280,7 +1988,7 @@ export default function EquityResearchWorkPage() {
                     onChange={e => setTechnicalAnalysis(e.target.value)}
                     placeholder="Enter support/resistance levels, moving averages, breakout notes..."
                     style={{ textAlign: textAlignment }}
-                    className={`${inputCls} resize-y`}
+                    className={`${inputCls} resize-y ${textAlignCls}`}
                   />
                 </div>
               </div>
@@ -1366,24 +2074,198 @@ export default function EquityResearchWorkPage() {
             </div>
           </Card>
 
-          {/* ── Compile Button ────────────────────────────── */}
-          <button
-            id="er-compile-btn"
-            type="button"
-            onClick={handleCompile}
-            disabled={compiling}
-            className="w-full flex items-center justify-center gap-2.5 py-4 rounded-xl text-sm font-extrabold text-white
-              bg-gradient-to-r from-violet-600 via-indigo-600 to-violet-700
-              hover:from-violet-500 hover:to-indigo-500
-              shadow-lg shadow-violet-500/25
-              transition-all duration-200 active:scale-[0.98] cursor-pointer"
-          >
-            <FileBarChart2 className="w-5 h-5" />
-            {compiling ? 'Compiling Dossier Report…' : 'Compile Standard Research Report'}
-          </button>
+          {/* ── Compile & Save Actions ───────────────────────── */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <button
+              id="er-compile-btn"
+              type="button"
+              onClick={handleCompile}
+              disabled={compiling}
+              className="sm:col-span-2 flex items-center justify-center gap-2.5 py-3.5 rounded-xl text-sm font-extrabold text-white
+                bg-gradient-to-r from-violet-600 via-indigo-600 to-violet-700
+                hover:from-violet-500 hover:to-indigo-500
+                shadow-lg shadow-violet-500/25
+                transition-all duration-200 active:scale-[0.98] cursor-pointer"
+            >
+              <FileBarChart2 className="w-5 h-5" />
+              {compiling ? 'Compiling Dossier Report…' : 'Compile Standard Research Report'}
+            </button>
+
+            <button
+              type="button"
+              onClick={handleSaveReportToDatabase}
+              disabled={savingToDb}
+              className="flex items-center justify-center gap-2 py-3.5 rounded-xl text-xs font-extrabold text-emerald-700 dark:text-emerald-300
+                bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-300 dark:border-emerald-800
+                hover:bg-emerald-100 dark:hover:bg-emerald-900/50
+                shadow-xs transition-all active:scale-[0.98] cursor-pointer disabled:opacity-50"
+            >
+              <Database className={`w-4 h-4 ${savingToDb ? 'animate-spin' : ''}`} />
+              {savingToDb ? 'Saving to DB…' : currentReportId ? `Update in DB (#${currentReportId})` : 'Save Report to Database'}
+            </button>
+          </div>
 
         </div>
       </div>
+
+      {/* ── Saved Reports History Modal ── */}
+      {showHistoryModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl w-full max-w-3xl max-h-[85vh] flex flex-col shadow-2xl overflow-hidden">
+            {/* Modal Header */}
+            <div className="flex items-center justify-between p-4 sm:p-5 border-b border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/50">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-violet-100 dark:bg-violet-950/60 text-violet-600 dark:text-violet-400 flex items-center justify-center">
+                  <Database className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm sm:text-base font-black text-slate-900 dark:text-white">
+                    Saved Research Reports Database
+                  </h3>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                    Browse, load, and re-edit reports stored in the cloud database
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowHistoryModal(false)}
+                className="p-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 transition cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Search Filter */}
+            <div className="p-3 sm:p-4 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900">
+              <div className="relative">
+                <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <input
+                  type="text"
+                  value={historySearch}
+                  onChange={e => {
+                    setHistorySearch(e.target.value);
+                    handleFetchSavedReports(e.target.value);
+                  }}
+                  placeholder="Filter by Stock Ticker, Company Name, or Sector..."
+                  className={`${inputCls} pl-9`}
+                />
+              </div>
+            </div>
+
+            {/* Reports List */}
+            <div className="flex-1 overflow-y-auto p-4 space-y-2.5 divide-y divide-slate-100 dark:divide-slate-800/60">
+              {loadingReports ? (
+                <div className="py-12 flex flex-col items-center justify-center text-slate-400">
+                  <div className="w-6 h-6 border-2 border-violet-500 border-t-transparent rounded-full animate-spin mb-2"></div>
+                  <span className="text-xs font-semibold">Loading saved reports from database...</span>
+                </div>
+              ) : savedReports.length === 0 ? (
+                <div className="py-12 flex flex-col items-center justify-center text-center text-slate-400 space-y-2">
+                  <FolderOpen className="w-10 h-10 text-slate-300 dark:text-slate-600" />
+                  <span className="text-sm font-bold text-slate-700 dark:text-slate-300">No Saved Reports Found</span>
+                  <p className="text-xs text-slate-400 max-w-sm">
+                    {historySearch ? 'No reports matched your search term.' : 'You have not saved any reports to the database yet. Click "Save to DB" to archive your work.'}
+                  </p>
+                </div>
+              ) : (
+                savedReports.map(rep => {
+                  const recPillColor = rep.recommendation === 'Buy' || rep.recommendation === 'Accumulate'
+                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-400'
+                    : rep.recommendation === 'Sell' || rep.recommendation === 'Reduce'
+                    ? 'bg-red-50 text-red-700 border-red-200 dark:bg-red-950/40 dark:text-red-400'
+                    : 'bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950/40 dark:text-amber-400';
+
+                  const dateStr = new Date(rep.updated_at || rep.created_at).toLocaleDateString('en-GB', {
+                    day: '2-digit',
+                    month: 'short',
+                    year: 'numeric',
+                  });
+
+                  return (
+                    <div
+                      key={rep.id}
+                      className="pt-2.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-800/50 transition border border-transparent hover:border-slate-200 dark:hover:border-slate-700/60"
+                    >
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-xs font-black text-slate-900 dark:text-white">
+                            {rep.company_name}
+                          </span>
+                          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 font-bold">
+                            {rep.symbol}
+                          </span>
+                          <span className={`text-[10px] px-2 py-0.5 rounded-full font-extrabold border ${recPillColor}`}>
+                            {rep.recommendation}
+                          </span>
+                          <span className="text-[10px] text-slate-400 font-medium">
+                            v{rep.version}
+                          </span>
+                        </div>
+
+                        <div className="flex items-center gap-3 text-[11px] text-slate-500 dark:text-slate-400 mt-1 flex-wrap">
+                          {rep.current_price && (
+                            <span>CMP: <strong className="text-slate-700 dark:text-slate-200">₹{rep.current_price}</strong></span>
+                          )}
+                          {rep.target_price && (
+                            <span>Target: <strong className="text-emerald-600 dark:text-emerald-400">₹{rep.target_price}</strong></span>
+                          )}
+                          <span>&bull; {rep.sector}</span>
+                          <span className="flex items-center gap-1 text-[10px] text-slate-400">
+                            <Calendar className="w-3 h-3" /> {dateStr}
+                          </span>
+                          <span>&bull; By {rep.created_by_name}</span>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => handleLoadSavedReport(rep.id, false)}
+                          className="px-3 py-1.5 rounded-xl bg-violet-600 hover:bg-violet-700 text-white text-xs font-bold shadow-xs transition cursor-pointer"
+                        >
+                          Load & Edit
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleLoadSavedReport(rep.id, true)}
+                          className="px-2.5 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-200 text-xs font-bold transition cursor-pointer flex items-center gap-1"
+                          title="View compiled report"
+                        >
+                          <Eye className="w-3.5 h-3.5" /> View
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(e) => handleDeleteSavedReport(rep.id, rep.company_name, e)}
+                          className="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/30 rounded-xl transition cursor-pointer"
+                          title="Delete from database"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="p-3 sm:p-4 border-t border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/50 flex items-center justify-between">
+              <span className="text-[11px] text-slate-400">
+                {savedReports.length} report{savedReports.length === 1 ? '' : 's'} stored in database
+              </span>
+              <button
+                type="button"
+                onClick={() => setShowHistoryModal(false)}
+                className="px-4 py-2 rounded-xl bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-bold hover:bg-slate-300 transition cursor-pointer"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }

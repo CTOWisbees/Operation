@@ -68,5 +68,11 @@ urlpatterns = [
     path('ia/recommendations/<int:pk>/delete', views.api_stock_recommendation_delete, name='api_stock_recommendation_delete'),
     path('ia/recommendations/calculate', views.api_stock_recommendations_calculate, name='api_stock_recommendations_calculate'),
     path('ia/recommendations/refresh-prices', views.api_stock_recommendations_refresh_prices, name='api_stock_recommendations_refresh_prices'),
+
+    # IA (Equity Research Reports Database Storage & History) endpoints
+    path('ia/reports', views.api_equity_reports_list, name='api_equity_reports_list'),
+    path('ia/reports/save', views.api_equity_report_save, name='api_equity_report_save'),
+    path('ia/reports/<int:pk>', views.api_equity_report_detail, name='api_equity_report_detail'),
+    path('ia/reports/<int:pk>/delete', views.api_equity_report_delete, name='api_equity_report_delete'),
 ]
 

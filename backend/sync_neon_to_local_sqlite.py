@@ -10,7 +10,7 @@ import sqlite3
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SQLITE_PATH = os.path.join(BASE_DIR, 'ops.db')
-NEON_URL = "postgresql://neondb_owner:npg_zGjkfO4E2xTN@ep-hidden-wind-b4fncj1m.c-6.us-east-2.aws.neon.tech/neondb?sslmode=require"
+NEON_URL = os.environ.get("DATABASE_URL", "postgresql://neondb_owner:npg_BWxIEbzou1h6@ep-mute-cell-a1butwqf-pooler.ap-southeast-1.aws.neon.tech/neondb?sslmode=require")
 
 def sync_data():
     print("==================================================")

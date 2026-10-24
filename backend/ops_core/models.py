@@ -493,3 +493,30 @@ class StockRecommendation(models.Model):
     def __str__(self):
         return f"{self.symbol} ({self.recommendation_type} @ ₹{self.recommended_price}) on {self.recommendation_date}"
 
+
+class EquityResearchReport(models.Model):
+    created_by = models.ForeignKey(OperationUser, on_delete=models.SET_NULL, null=True, blank=True, related_name='equity_reports')
+    created_by_name = models.CharField(max_length=150, blank=True, default='')
+    symbol = models.CharField(max_length=50, verbose_name="Stock Symbol / Ticker", db_index=True)
+    company_name = models.CharField(max_length=150, verbose_name="Company Name", db_index=True)
+    sector = models.CharField(max_length=100, blank=True, default='Equities & Advisory')
+    current_price = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    target_price = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    recommendation = models.CharField(max_length=30, default='Buy')
+    time_horizon = models.CharField(max_length=50, default='12 - 24 Months')
+    comp_mode = models.CharField(max_length=100, default='Peer Comparison (Target Co. vs Peers)')
+    report_data = models.JSONField(default=dict, blank=True, help_text="Complete JSON payload of the dossier")
+    chart_image_url = models.TextField(blank=True, default='', help_text="Base64 or URL of technical chart")
+    version = models.IntegerField(default=1)
+    is_archived = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Equity Research Report"
+        verbose_name_plural = "Equity Research Reports"
+        ordering = ['-updated_at', '-created_at']
+
+    def __str__(self):
+        return f"{self.symbol} - {self.company_name} ({self.recommendation}) [{self.updated_at.strftime('%Y-%m-%d')}]"
+

@@ -741,12 +741,12 @@ export default function StockPerformanceTrackerPage() {
           {summary?.best_call ? (
             <div className="mt-2">
               <div className="flex items-center justify-between">
-                <span className="text-base font-black truncate">{summary.best_call.symbol}</span>
+                <span className="text-sm font-black truncate max-w-[140px]">{summary.best_call.company_name || summary.best_call.symbol}</span>
                 <span className="text-base font-black text-emerald-600 dark:text-emerald-400">
                   +{summary.best_call.return_pct}%
                 </span>
               </div>
-              <div className="text-[11px] text-slate-400 truncate mt-0.5">{summary.best_call.company_name}</div>
+              <div className="text-[10px] font-mono text-slate-400 truncate mt-0.5">{summary.best_call.symbol}</div>
             </div>
           ) : (
             <div className="mt-3 text-xs text-slate-400 font-semibold">No recommendations yet</div>
@@ -863,13 +863,15 @@ export default function StockPerformanceTrackerPage() {
                       {/* Stock & Sector */}
                       <td className="px-4 py-3.5">
                         <div className="font-extrabold text-slate-900 dark:text-white flex items-center gap-1.5">
-                          <span>{rec.symbol}</span>
+                          <span className="truncate max-w-[170px]" title={rec.company_name || rec.symbol}>
+                            {rec.company_name || rec.symbol}
+                          </span>
                           {rec.status === 'Target Hit' && (
                             <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
                           )}
                         </div>
-                        <div className="text-[11px] text-slate-400 truncate max-w-[140px]">
-                          {rec.company_name} • <span className="text-slate-500">{rec.sector}</span>
+                        <div className="text-[11px] text-slate-400 truncate max-w-[170px]">
+                          <span className="font-mono text-slate-500 font-bold">{rec.symbol}</span> • <span className="text-slate-500">{rec.sector}</span>
                         </div>
                       </td>
 
