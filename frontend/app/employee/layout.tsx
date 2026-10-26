@@ -90,18 +90,22 @@ export default function EmployeeLayout({
   }
 
   return (
-    <div className="flex min-h-screen bg-[var(--bg-main)] text-[var(--text-primary)] transition-colors">
-      <Sidebar user={user} mobileOpen={mobileOpen} setMobileOpen={setMobileOpen} />
+    <div className="flex min-h-screen bg-[var(--bg-main)] text-[var(--text-primary)] transition-colors print:bg-white print:min-h-0 print:block">
+      <div className="print:hidden">
+        <Sidebar user={user} mobileOpen={mobileOpen} setMobileOpen={setMobileOpen} />
+      </div>
 
-      <div className="flex-1 flex flex-col min-w-0">
-        <Navbar
-          title="Employee Workspace"
-          subtitle="My Assigned Operational Tasks & Role Scope"
-          user={user}
-          onMenuClick={() => setMobileOpen(true)}
-        />
+      <div className="flex-1 flex flex-col min-w-0 print:block print:w-full">
+        <div className="print:hidden">
+          <Navbar
+            title="Employee Workspace"
+            subtitle="My Assigned Operational Tasks & Role Scope"
+            user={user}
+            onMenuClick={() => setMobileOpen(true)}
+          />
+        </div>
 
-        <main className="flex-1 p-3 sm:p-6 lg:p-8 max-w-7xl w-full mx-auto">
+        <main className="flex-1 p-3 sm:p-6 lg:p-8 max-w-7xl w-full mx-auto print:p-0 print:m-0 print:max-w-full print:w-full print:bg-white">
           {children}
         </main>
       </div>

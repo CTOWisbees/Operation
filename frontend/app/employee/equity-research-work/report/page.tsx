@@ -382,7 +382,30 @@ export default function EquityResearchReportPage() {
   }, []);
 
   const handlePrint = () => {
-    window.print();
+    // Disable edit outline during print
+    const wasEditable = isEditable;
+    if (wasEditable) {
+      setIsEditable(false);
+    }
+
+    const origTitle = typeof document !== 'undefined' ? document.title : '';
+    const cleanCompany = (resolvedCompanyName || stockSymbol || 'Equity_Research').replace(/[^a-zA-Z0-9]/g, '_');
+    if (typeof document !== 'undefined') {
+      document.title = `WisBees_Research_${cleanCompany}_${priceAsOn || ''}`;
+    }
+
+    // Allow state to apply before opening print dialog
+    setTimeout(() => {
+      window.print();
+      setTimeout(() => {
+        if (typeof document !== 'undefined') {
+          document.title = origTitle;
+        }
+        if (wasEditable) {
+          setIsEditable(true);
+        }
+      }, 500);
+    }, 60);
   };
 
   // ── Export Dossier JSON ──
@@ -737,47 +760,120 @@ export default function EquityResearchReportPage() {
   const textAlignCls = textAlignment === 'left' ? 'text-left' : textAlignment === 'center' ? 'text-center' : textAlignment === 'right' ? 'text-right' : 'text-justify';
 
   return (
-    <div className="w-full pb-16 font-sans">
+    <div className="w-full pb-16 print:pb-0 font-sans">
       
       {/* ── Scoped Print Styles ── */}
-      <style jsx global>{`
+      <style dangerouslySetInnerHTML={{ __html: `
         @media print {
-          body * {
-            visibility: hidden !important;
+          /* 1. Reset Root Canvas to Pure White */
+          html,
+          body {
+            background: #ffffff !important;
+            background-color: #ffffff !important;
+            color: #0f172a !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            width: 100% !important;
+            min-height: 100% !important;
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
           }
+
+          /* 2. Hide Portal Chrome & Action Bars */
           aside,
           header,
           nav,
+          footer,
           [role="navigation"],
           .print\\:hidden,
           #er-floating-bar,
-          #er-notice-bar {
+          #er-notice-bar,
+          #er-saved-reports-modal,
+          button {
             display: none !important;
             visibility: hidden !important;
           }
-          #equity-research-dossier-paper,
-          #equity-research-dossier-paper * {
-            visibility: visible !important;
+
+          /* 3. Strip layout wrappers of dark backgrounds & paddings */
+          body > div,
+          div.min-h-screen,
+          div.flex,
+          div.flex-1,
+          main {
+            background: #ffffff !important;
+            background-color: #ffffff !important;
+            color: #0f172a !important;
+            padding: 0 !important;
+            margin: 0 !important;
+            max-width: 100% !important;
+            width: 100% !important;
+            border: none !important;
+            box-shadow: none !important;
+            display: block !important;
           }
+
+          /* 4. Dossier Paper Document: in-flow static block, full width */
           #equity-research-dossier-paper {
-            position: absolute !important;
-            left: 0 !important;
-            top: 0 !important;
+            position: static !important;
+            display: block !important;
             width: 100% !important;
             max-width: 100% !important;
             margin: 0 !important;
             padding: 0 !important;
             border: none !important;
+            outline: none !important;
             box-shadow: none !important;
+            border-radius: 0 !important;
             background: #ffffff !important;
-            color: #000000 !important;
+            background-color: #ffffff !important;
+            color: #0f172a !important;
           }
+
+          #equity-research-dossier-paper,
+          #equity-research-dossier-paper * {
+            outline: none !important;
+            box-shadow: none !important;
+          }
+
+          /* 5. A4 Page Dimensions with clean margins */
           @page {
             size: A4 portrait;
-            margin: 12mm 15mm;
+            margin: 12mm 14mm;
+          }
+
+          /* 6. Page Breaks and Orphan Prevention */
+          h1, h2, h3, h4, .section-heading {
+            break-after: avoid !important;
+            page-break-after: avoid !important;
+          }
+
+          .report-section,
+          .page-break-inside-avoid,
+          .break-inside-avoid,
+          table,
+          tbody,
+          tr {
+            break-inside: avoid !important;
+            page-break-inside: avoid !important;
+          }
+
+          /* Keep entire Section 3 Financials comparison together */
+          .section-financials {
+            break-inside: avoid !important;
+            page-break-inside: avoid !important;
+          }
+
+          table {
+            width: 100% !important;
+            border-collapse: collapse !important;
+          }
+
+          th, td {
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
           }
         }
-      `}</style>
+      `}} />
 
       {/* ── Top Action Toolbar ── */}
       <div
@@ -940,7 +1036,7 @@ export default function EquityResearchReportPage() {
         id="equity-research-dossier-paper"
         contentEditable={isEditable}
         suppressContentEditableWarning
-        className={`max-w-4xl mx-auto bg-white text-slate-900 rounded-2xl shadow-xl p-5 sm:p-10 md:p-12 font-sans border border-slate-200 print:shadow-none print:border-none print:p-0 print:max-w-full ${
+        className={`max-w-4xl mx-auto bg-white text-slate-900 rounded-2xl shadow-xl p-5 sm:p-10 md:p-12 font-sans border border-slate-200 print:shadow-none print:border-none print:outline-none print:rounded-none print:p-0 print:m-0 print:max-w-full print:w-full print:bg-white ${
           isEditable ? 'outline-2 outline-dashed outline-violet-400' : ''
         }`}
       >
@@ -1008,7 +1104,7 @@ export default function EquityResearchReportPage() {
         </div>
 
         {/* ── Section 1: Stock Overview ───────────────── */}
-        <div className="mb-8">
+        <div className="mb-8 report-section break-inside-avoid page-break-inside-avoid">
           <h2 className="text-xs sm:text-sm font-black text-slate-950 uppercase tracking-wide mb-3">
             1. STOCK OVERVIEW
           </h2>
@@ -1047,7 +1143,7 @@ export default function EquityResearchReportPage() {
         </div>
 
         {/* ── Section 2: Technical Chart ─────────────── */}
-        <div className="mb-8 page-break-inside-avoid">
+        <div className="mb-8 report-section break-inside-avoid page-break-inside-avoid">
           <h2 className="text-xs sm:text-sm font-black text-slate-950 uppercase tracking-wide mb-3">
             2. WHAT&apos;S HAPPENING ON THE CHART?
           </h2>
@@ -1206,7 +1302,7 @@ export default function EquityResearchReportPage() {
         </div>
 
         {/* ── Section 3: Dynamic Financial Analysis (By Comparison Mode) ── */}
-        <div className="mb-8 page-break-inside-avoid">
+        <div className="mb-8 report-section section-financials break-inside-avoid page-break-inside-avoid">
           <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
             <h2 className="text-xs sm:text-sm font-black text-slate-950 uppercase tracking-wide">
               3. {resolvedCompanyName} FINANCIAL ANALYSIS &amp; VALUATION
@@ -1314,7 +1410,7 @@ export default function EquityResearchReportPage() {
         </div>
 
         {/* ── Section 4: Understanding Business & Evaluation (With Alignment) ─ */}
-        <div className="mb-8 space-y-4 page-break-inside-avoid">
+        <div className="mb-8 space-y-4 report-section">
           <div className="flex items-center justify-between flex-wrap gap-2">
             <h2 className="text-xs sm:text-sm font-black text-slate-950 uppercase tracking-wide">
               4. UNDERSTANDING BUSINESS &amp; EVALUATION
@@ -1360,7 +1456,7 @@ export default function EquityResearchReportPage() {
             className="space-y-4 text-xs text-slate-700 leading-relaxed"
             style={{ textAlign: textAlignment }}
           >
-            <div>
+            <div className="break-inside-avoid page-break-inside-avoid">
               <h3 className="font-black text-slate-900 text-xs mb-1.5 uppercase tracking-wide">
                 Business Overview (Moat)
               </h3>
@@ -1371,7 +1467,7 @@ export default function EquityResearchReportPage() {
               </p>
             </div>
 
-            <div>
+            <div className="break-inside-avoid page-break-inside-avoid">
               <h3 className="font-black text-slate-900 text-xs mb-1.5 uppercase tracking-wide">
                 Relative Valuation Thesis
               </h3>
@@ -1382,7 +1478,7 @@ export default function EquityResearchReportPage() {
               </p>
             </div>
 
-            <div>
+            <div className="break-inside-avoid page-break-inside-avoid">
               <h3 className="font-black text-slate-900 text-xs mb-1.5 uppercase tracking-wide">
                 Technical Chart Analysis
               </h3>
@@ -1396,7 +1492,7 @@ export default function EquityResearchReportPage() {
         </div>
 
         {/* ── Section 5: What Analysts Say? (Consensus Table) ─ */}
-        <div className="mb-4 page-break-inside-avoid">
+        <div className="mb-4 report-section break-inside-avoid page-break-inside-avoid">
           <h2 className="text-xs sm:text-sm font-black text-slate-950 uppercase tracking-wide mb-3">
             5. WHAT ANALYSTS SAY? (STREET COVERAGE CONSENSUS)
           </h2>

@@ -13,6 +13,10 @@ db.sqlite3
 *.db
 ops.db
 staticfiles/
+venv/
+.venv/
+backend/venv/
+backend/.venv/
 
 # Node & Next.js
 frontend/node_modules/

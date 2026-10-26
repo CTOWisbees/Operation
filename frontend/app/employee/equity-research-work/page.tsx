@@ -37,7 +37,7 @@ import {
   Calendar,
   Eye,
 } from 'lucide-react';
-import { getOpsBaseUrl } from '@/lib/api';
+import { getOpsBaseUrl, safeJsonFetch } from '@/lib/api';
 
 // ─── Interfaces & Mode Definitions ───────────────────────────
 interface PeerCol {
@@ -850,8 +850,7 @@ export default function EquityResearchWorkPage() {
       try {
         setFetchingSuggestions(true);
         const baseUrl = getOpsBaseUrl().replace(/\/$/, '');
-        const res = await fetch(`${baseUrl}/ia/search-stocks?query=${encodeURIComponent(stockQuery)}`);
-        const data = await res.json();
+        const data = await safeJsonFetch(`${baseUrl}/ia/search-stocks?query=${encodeURIComponent(stockQuery)}`);
         setSuggestions(data.results || []);
       } catch {
         setSuggestions([]);
@@ -874,8 +873,7 @@ export default function EquityResearchWorkPage() {
     }
 
     const baseUrl = getOpsBaseUrl().replace(/\/$/, '');
-    fetch(`${baseUrl}/ia/search-stocks?query=${encodeURIComponent(query)}`)
-      .then(res => res.json())
+    safeJsonFetch(`${baseUrl}/ia/search-stocks?query=${encodeURIComponent(query)}`)
       .then(data => {
         setPeerSuggestions(prev => ({ ...prev, [colId]: data.results || [] }));
       })
@@ -896,14 +894,13 @@ export default function EquityResearchWorkPage() {
     try {
       const baseUrl = getOpsBaseUrl().replace(/\/$/, '');
       const token = localStorage.getItem('ops_token');
-      const res = await fetch(`${baseUrl}/ia/fetch-stock-data?query=${encodeURIComponent(peerSymbol)}`, {
+      const data = await safeJsonFetch(`${baseUrl}/ia/fetch-stock-data?query=${encodeURIComponent(peerSymbol)}`, {
         headers: {
           Authorization: `Bearer ${token}`,
           'X-User-Auth': token || '',
         },
       });
-      const data = await res.json();
-      if (res.ok && data.success) {
+      if (data && data.success) {
         const fetchedMcap = data.metricsData?.market_cap?.[1] || '';
         const fetchedPe = data.metricsData?.pe_ratio?.[1] || '';
         const fetchedRoe = data.metricsData?.roe?.[1] || '';
@@ -941,16 +938,12 @@ export default function EquityResearchWorkPage() {
     try {
       const baseUrl = getOpsBaseUrl().replace(/\/$/, '');
       const token = localStorage.getItem('ops_token');
-      const res = await fetch(`${baseUrl}/ia/fetch-stock-data?query=${encodeURIComponent(q)}`, {
+      const data = await safeJsonFetch(`${baseUrl}/ia/fetch-stock-data?query=${encodeURIComponent(q)}`, {
         headers: {
           Authorization: `Bearer ${token}`,
           'X-User-Auth': token || '',
         },
       });
-      const data = await res.json();
-      if (!res.ok || data.error) {
-        throw new Error(data.error || 'Failed to fetch stock data');
-      }
 
       if (data.companyName) {
         setCompanyName(data.companyName);
@@ -1007,13 +1000,12 @@ export default function EquityResearchWorkPage() {
     try {
       const baseUrl = getOpsBaseUrl().replace(/\/$/, '');
       const token = localStorage.getItem('ops_token');
-      const res = await fetch(`${baseUrl}/ia/fetch-stock-data?query=${encodeURIComponent(q)}`, {
+      const data = await safeJsonFetch(`${baseUrl}/ia/fetch-stock-data?query=${encodeURIComponent(q)}`, {
         headers: {
           Authorization: `Bearer ${token}`,
           'X-User-Auth': token || '',
         },
       });
-      const data = await res.json();
       if (data.businessOverview) setBusinessOverview(data.businessOverview);
       if (data.valuationThesis) setValuationThesis(data.valuationThesis);
       if (data.technicalAnalysis) setTechnicalAnalysis(data.technicalAnalysis);
@@ -1021,7 +1013,7 @@ export default function EquityResearchWorkPage() {
       setSuccessToast('AI Research commentary generated successfully.');
       setTimeout(() => setSuccessToast(''), 3000);
     } catch (err: any) {
-      setFetchError('Failed to generate AI commentary.');
+      setFetchError(err.message || 'Failed to generate AI commentary.');
     } finally {
       setFetchingAiThesis(false);
     }

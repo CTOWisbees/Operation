@@ -121,43 +121,101 @@ body {
 
 /* ── Print Media Optimization ── */
 @media print {
-  html, body {
+  /* 1. Global Reset to Pure White Canvas */
+  html,
+  body {
     background: #ffffff !important;
-    color: #000000 !important;
+    background-color: #ffffff !important;
+    color: #0f172a !important;
     margin: 0 !important;
     padding: 0 !important;
+    width: 100% !important;
+    min-height: 100% !important;
     -webkit-print-color-adjust: exact !important;
     print-color-adjust: exact !important;
   }
 
-  /* Hide portal layout chrome */
+  /* 2. Hide Portal Navigation, Headers, Footers, and Toolbars */
   aside,
   header,
   nav,
+  footer,
   [role="navigation"],
   .print\:hidden {
     display: none !important;
   }
 
+  /* 3. Strip layout constraints and dark backgrounds from ancestor wrappers */
+  body > div,
+  div.min-h-screen,
+  div.flex,
+  div.flex-1,
   main {
+    background: #ffffff !important;
+    background-color: #ffffff !important;
+    color: #0f172a !important;
     padding: 0 !important;
     margin: 0 !important;
     max-width: 100% !important;
     width: 100% !important;
+    display: block !important;
+    border: none !important;
+    box-shadow: none !important;
   }
 
+  /* 4. Document Paper: Clean, full printable width */
   #equity-research-dossier-paper {
+    position: static !important;
+    display: block !important;
     box-shadow: none !important;
     border: none !important;
+    outline: none !important;
+    border-radius: 0 !important;
     padding: 0 !important;
-    margin: 0 auto !important;
+    margin: 0 !important;
     width: 100% !important;
     max-width: 100% !important;
+    background: #ffffff !important;
+    background-color: #ffffff !important;
+    color: #0f172a !important;
   }
 
+  #equity-research-dossier-paper * {
+    outline: none !important;
+    box-shadow: none !important;
+  }
+
+  /* 5. Clean A4 Dimensions & Margins */
   @page {
-    size: A4;
-    margin: 10mm;
+    size: A4 portrait;
+    margin: 12mm 14mm;
+  }
+
+  /* 6. Page Breaks and Orphan Prevention */
+  h1, h2, h3, h4, .section-heading {
+    break-after: avoid !important;
+    page-break-after: avoid !important;
+  }
+
+  .report-section,
+  .break-inside-avoid,
+  .page-break-inside-avoid,
+  table,
+  tbody,
+  tr {
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
+  }
+
+  table {
+    width: 100% !important;
+    border-collapse: collapse !important;
+  }
+
+  th, td {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
   }
 }
+
 

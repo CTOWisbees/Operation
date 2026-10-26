@@ -2142,364 +2142,401 @@ def api_ia_search_stocks(request):
     return JsonResponse({'results': results[:12]})
 
 
+def _get_yahoo_stock_chart(sym: str) -> dict:
+    """Fetch live metadata and quote using Yahoo Finance public chart API (zero extra dependencies)."""
+    try:
+        req_url = f'https://query1.finance.yahoo.com/v8/finance/chart/{sym}?interval=1d&range=1mo'
+        req = urllib.request.Request(req_url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'})
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read().decode('utf-8'))
+            results = data.get('chart', {}).get('result', [])
+            if results and len(results) > 0:
+                return results[0].get('meta', {})
+    except Exception:
+        pass
+    return {}
+
+
 @csrf_exempt
 def api_ia_fetch_stock_data(request):
     """
     Fetch comprehensive live stock fundamentals and AI-generated institutional analyst notes.
     Accepts GET query param ?query=WIPRO or POST JSON {query: 'WIPRO'}
     """
-    if request.method == 'POST':
-        body = parse_request_json(request)
-        query = body.get('query') or body.get('ticker') or ''
-    else:
-        query = request.GET.get('query') or request.GET.get('ticker') or ''
-
-    query = query.strip()
-    if not query:
-        return JsonResponse({'error': 'Stock symbol or company name is required'}, status=400)
-
-    sym = _format_ticker_symbol(query)
-
-    import yfinance as yf
+    query = ''
     try:
-        ticker = yf.Ticker(sym)
-        fast_info = getattr(ticker, 'fast_info', None)
-        info = ticker.info or {}
-    except Exception as exc:
-        fast_info = None
+        if request.method == 'POST':
+            body = parse_request_json(request)
+            query = body.get('query') or body.get('ticker') or ''
+        else:
+            query = request.GET.get('query') or request.GET.get('ticker') or ''
+
+        query = query.strip()
+        if not query:
+            return JsonResponse({'error': 'Stock symbol or company name is required'}, status=400)
+
+        sym = _format_ticker_symbol(query)
+
+        # 1. Safely attempt yfinance (if installed & available)
         info = {}
-
-    # Extract Full Company Name and Ticker
-    full_company_name = _get_company_full_name(sym, info)
-    short_name = full_company_name
-
-    # Current Market Price (CMP) with multiple fallbacks
-    fast_price = _safe_float(getattr(fast_info, 'last_price', None) or getattr(fast_info, 'previous_close', None))
-    current_price = fast_price if fast_price > 0 else _safe_float(
-        info.get('currentPrice') or info.get('regularMarketPrice') or info.get('previousClose')
-    )
-    if current_price <= 0:
+        fast_info = None
+        yf = None
         try:
-            req_url = f'https://query1.finance.yahoo.com/v8/finance/chart/{sym}?interval=1d&range=1mo'
-            resp = urllib.request.urlopen(urllib.request.Request(req_url, headers={'User-Agent': 'Mozilla/5.0'}), timeout=4)
-            chart_data = json.loads(resp.read().decode('utf-8'))
-            meta = chart_data.get('chart', {}).get('result', [{}])[0].get('meta', {})
-            current_price = _safe_float(meta.get('regularMarketPrice') or meta.get('chartPreviousClose'))
+            import yfinance as yf_module
+            yf = yf_module
+            ticker = yf.Ticker(sym)
+            fast_info = getattr(ticker, 'fast_info', None)
+            info = ticker.info or {}
         except Exception:
+            fast_info = None
+            info = {}
+
+        # 2. Always fetch direct Yahoo chart meta for high-reliability fallback
+        chart_meta = _get_yahoo_stock_chart(sym)
+
+        # Extract Full Company Name and Ticker
+        full_company_name = (
+            _get_company_full_name(sym, info)
+            or chart_meta.get('longName')
+            or chart_meta.get('shortName')
+            or sym.split('.')[0]
+        )
+        short_name = full_company_name
+
+        # Current Market Price (CMP) with multiple fallbacks
+        fast_price = _safe_float(getattr(fast_info, 'last_price', None) or getattr(fast_info, 'previous_close', None))
+        current_price = fast_price if fast_price > 0 else _safe_float(
+            info.get('currentPrice') or info.get('regularMarketPrice') or info.get('previousClose')
+        )
+        if current_price <= 0 and chart_meta:
+            current_price = _safe_float(chart_meta.get('regularMarketPrice') or chart_meta.get('chartPreviousClose'))
+
+        if current_price <= 0:
             current_price = 450.00
 
-    # Market Cap (Cr) Calculation with 100% accuracy — Never fake 150000.00
-    fast_mcap = _safe_float(getattr(fast_info, 'market_cap', None))
-    info_mcap = _safe_float(info.get('marketCap'))
-    market_cap_raw = fast_mcap if fast_mcap > 0 else info_mcap
+        # Market Cap (Cr) Calculation with 100% accuracy — Never fake 150000.00
+        fast_mcap = _safe_float(getattr(fast_info, 'market_cap', None))
+        info_mcap = _safe_float(info.get('marketCap'))
+        market_cap_raw = fast_mcap if fast_mcap > 0 else info_mcap
 
-    if market_cap_raw > 0:
-        market_cap_cr = round(market_cap_raw / 10000000, 2)
-    else:
-        # Calculate from shares outstanding
-        shares = _safe_float(info.get('sharesOutstanding') or info.get('impliedSharesOutstanding'))
-        if shares > 0 and current_price > 0:
-            market_cap_cr = round((shares * current_price) / 10000000, 2)
+        if market_cap_raw > 0:
+            market_cap_cr = round(market_cap_raw / 10000000, 2)
         else:
-            market_cap_cr = round(current_price * 15.5, 2)
+            # Calculate from shares outstanding
+            shares = _safe_float(info.get('sharesOutstanding') or info.get('impliedSharesOutstanding'))
+            if shares > 0 and current_price > 0:
+                market_cap_cr = round((shares * current_price) / 10000000, 2)
+            else:
+                market_cap_cr = round(current_price * 15.5, 2)
 
-    pe_ratio = round(_safe_float(info.get('trailingPE') or info.get('forwardPE')), 2)
-    if pe_ratio <= 0:
-        pe_ratio = 21.40
+        pe_ratio = round(_safe_float(info.get('trailingPE') or info.get('forwardPE')), 2)
+        if pe_ratio <= 0:
+            pe_ratio = 21.40
 
-    roe = round(_safe_float(info.get('returnOnEquity')) * 100, 2)
-    if roe <= 0:
-        roe = 18.20
+        roe = round(_safe_float(info.get('returnOnEquity')) * 100, 2)
+        if roe <= 0:
+            roe = 18.20
 
-    opm = round(_safe_float(info.get('operatingMargins')) * 100, 2)
-    if opm <= 0:
-        opm = 19.50
+        opm = round(_safe_float(info.get('operatingMargins')) * 100, 2)
+        if opm <= 0:
+            opm = 19.50
 
-    ev_ebitda = round(_safe_float(info.get('enterpriseToEbitda')), 2)
-    if ev_ebitda <= 0:
-        ev_ebitda = 14.20
+        ev_ebitda = round(_safe_float(info.get('enterpriseToEbitda')), 2)
+        if ev_ebitda <= 0:
+            ev_ebitda = 14.20
 
-    roce = round(roe * 1.15, 2)  # ROCE institutional standard correlation
+        roce = round(roe * 1.15, 2)  # ROCE institutional standard correlation
 
-    matched_stock = next((s for s in POPULAR_STOCKS if s['symbol'].upper() == sym.upper() or s['symbol'].split('.')[0].upper() == query.upper()), None)
-    default_sector = matched_stock['sector'] if matched_stock else 'Healthcare'
+        matched_stock = next((s for s in POPULAR_STOCKS if s['symbol'].upper() == sym.upper() or s['symbol'].split('.')[0].upper() == query.upper()), None)
+        default_sector = matched_stock['sector'] if matched_stock else 'Healthcare'
 
-    sector = info.get('sector') or default_sector or 'Healthcare'
-    industry = info.get('industry') or 'Medical Services'
-    if sector and industry:
-        industry_sector_val = f"{sector} - {industry}"
-    elif sector:
-        industry_sector_val = sector
-    elif industry:
-        industry_sector_val = industry
-    else:
-        industry_sector_val = ''
+        sector = info.get('sector') or default_sector or 'Healthcare'
+        industry = info.get('industry') or 'Medical Services'
+        if sector and industry:
+            industry_sector_val = f"{sector} - {industry}"
+        elif sector:
+            industry_sector_val = sector
+        elif industry:
+            industry_sector_val = industry
+        else:
+            industry_sector_val = ''
 
-    high_52 = _safe_float(info.get('fiftyTwoWeekHigh'), current_price * 1.3)
-    low_52 = _safe_float(info.get('fiftyTwoWeekLow'), current_price * 0.8)
+        high_52 = _safe_float(info.get('fiftyTwoWeekHigh') or chart_meta.get('fiftyTwoWeekHigh'), current_price * 1.3)
+        low_52 = _safe_float(info.get('fiftyTwoWeekLow') or chart_meta.get('fiftyTwoWeekLow'), current_price * 0.8)
 
-    # Determine 12M Target Price & Recommendation
-    analyst_target = _safe_float(info.get('targetMeanPrice'))
-    if analyst_target > current_price:
-        target_price = round(analyst_target, 2)
-        upside_pct = round(((target_price - current_price) / current_price) * 100, 1)
-        recommendation = 'Buy' if upside_pct >= 15 else 'Accumulate'
-    else:
-        target_price = round(current_price * 1.25, 2)
-        upside_pct = 25.0
-        recommendation = 'Buy'
+        # Determine 12M Target Price & Recommendation
+        analyst_target = _safe_float(info.get('targetMeanPrice'))
+        if analyst_target > current_price:
+            target_price = round(analyst_target, 2)
+            upside_pct = round(((target_price - current_price) / current_price) * 100, 1)
+            recommendation = 'Buy' if upside_pct >= 15 else 'Accumulate'
+        else:
+            target_price = round(current_price * 1.25, 2)
+            upside_pct = 25.0
+            recommendation = 'Buy'
 
-    # Select Sector Peers
-    sector_upper = sector.upper()
-    peer_candidates = (
-        PEER_MAPPINGS.get(sector_upper) or
-        PEER_MAPPINGS.get(industry.upper()) or
-        ['APOLLOHOSP.NS', 'FORTIS.NS', 'SUNPHARMA.NS'] if 'HEALTH' in sector_upper or 'PHARMA' in sector_upper or 'LIFE' in short_name.upper()
-        else ['INFY.NS', 'TCS.NS', 'HCLTECH.NS']
-    )
-    chosen_peers = [p for p in peer_candidates if p.upper() != sym.upper()][:2]
-    if len(chosen_peers) < 2:
-        chosen_peers = ['APOLLOHOSP.NS', 'FORTIS.NS'] if 'HEALTH' in sector_upper else ['INFY.NS', 'TCS.NS']
+        # Select Sector Peers
+        sector_upper = sector.upper()
+        peer_candidates = (
+            PEER_MAPPINGS.get(sector_upper) or
+            PEER_MAPPINGS.get(industry.upper()) or
+            ['APOLLOHOSP.NS', 'FORTIS.NS', 'SUNPHARMA.NS'] if 'HEALTH' in sector_upper or 'PHARMA' in sector_upper or 'LIFE' in short_name.upper()
+            else ['INFY.NS', 'TCS.NS', 'HCLTECH.NS']
+        )
+        chosen_peers = [p for p in peer_candidates if p.upper() != sym.upper()][:2]
+        if len(chosen_peers) < 2:
+            chosen_peers = ['APOLLOHOSP.NS', 'FORTIS.NS'] if 'HEALTH' in sector_upper else ['INFY.NS', 'TCS.NS']
 
-    # Fetch Peer Metrics with Full Company Names
-    peer_metrics_list = []
-    for peer_sym in chosen_peers:
-        p_full_name = _get_company_full_name(peer_sym)
-        try:
-            p_tick = yf.Ticker(peer_sym)
-            p_fast = getattr(p_tick, 'fast_info', None)
-            p_inf = p_tick.info or {}
-            if p_inf:
-                p_full_name = _get_company_full_name(peer_sym, p_inf)
-            
-            p_raw_mcap = _safe_float(getattr(p_fast, 'market_cap', None) or p_inf.get('marketCap'))
-            p_mcap = round(p_raw_mcap / 10000000, 2) if p_raw_mcap > 0 else 54000.00
-            p_pe = round(_safe_float(p_inf.get('trailingPE') or p_inf.get('forwardPE')), 2)
-            p_roe = round(_safe_float(p_inf.get('returnOnEquity')) * 100, 2)
-            p_opm = round(_safe_float(p_inf.get('operatingMargins')) * 100, 2)
-            p_ev = round(_safe_float(p_inf.get('enterpriseToEbitda')), 2)
+        # Fetch Peer Metrics with Full Company Names
+        peer_metrics_list = []
+        for peer_sym in chosen_peers:
+            p_full_name = _get_company_full_name(peer_sym)
+            try:
+                p_inf = {}
+                p_fast = None
+                if yf:
+                    p_tick = yf.Ticker(peer_sym)
+                    p_fast = getattr(p_tick, 'fast_info', None)
+                    p_inf = p_tick.info or {}
+                    if p_inf:
+                        p_full_name = _get_company_full_name(peer_sym, p_inf)
 
-            peer_metrics_list.append({
-                'symbol': peer_sym,
-                'name': p_full_name,
-                'market_cap': str(p_mcap if p_mcap > 0 else 54000.00),
-                'pe_ratio': str(p_pe if p_pe > 0 else 24.5),
-                'roe': str(p_roe if p_roe > 0 else 22.0),
-                'roce': str(round(p_roe * 1.18, 2) if p_roe > 0 else 26.0),
-                'opm': str(p_opm if p_opm > 0 else 18.5),
-                'ev_ebitda': str(p_ev if p_ev > 0 else 15.2),
-            })
-        except Exception:
-            peer_metrics_list.append({
-                'symbol': peer_sym,
-                'name': p_full_name,
-                'market_cap': '45000.00',
-                'pe_ratio': '25.0',
-                'roe': '20.5',
-                'roce': '24.0',
-                'opm': '18.0',
-                'ev_ebitda': '14.5',
-            })
+                p_raw_mcap = _safe_float(getattr(p_fast, 'market_cap', None) or p_inf.get('marketCap'))
+                p_mcap = round(p_raw_mcap / 10000000, 2) if p_raw_mcap > 0 else 54000.00
+                p_pe = round(_safe_float(p_inf.get('trailingPE') or p_inf.get('forwardPE')), 2)
+                p_roe = round(_safe_float(p_inf.get('returnOnEquity')) * 100, 2)
+                p_opm = round(_safe_float(p_inf.get('operatingMargins')) * 100, 2)
+                p_ev = round(_safe_float(p_inf.get('enterpriseToEbitda')), 2)
 
-    # Prepare Peers Table Structure with Full Company Names
-    peers_payload = [
-        {'id': 1, 'label': 'Target Company'},
-        {'id': 2, 'label': 'Peer 1'},
-        {'id': 3, 'label': 'Peer 2'},
-    ]
-    peer_names_payload = {
-        1: f"{short_name} (TARGET)",
-        2: peer_metrics_list[0]['name'] if len(peer_metrics_list) > 0 else 'Peer 1',
-        3: peer_metrics_list[1]['name'] if len(peer_metrics_list) > 1 else 'Peer 2',
-    }
+                peer_metrics_list.append({
+                    'symbol': peer_sym,
+                    'name': p_full_name,
+                    'market_cap': str(p_mcap if p_mcap > 0 else 54000.00),
+                    'pe_ratio': str(p_pe if p_pe > 0 else 24.5),
+                    'roe': str(p_roe if p_roe > 0 else 22.0),
+                    'roce': str(round(p_roe * 1.18, 2) if p_roe > 0 else 26.0),
+                    'opm': str(p_opm if p_opm > 0 else 18.5),
+                    'ev_ebitda': str(p_ev if p_ev > 0 else 15.2),
+                })
+            except Exception:
+                peer_metrics_list.append({
+                    'symbol': peer_sym,
+                    'name': p_full_name,
+                    'market_cap': '45000.00',
+                    'pe_ratio': '25.0',
+                    'roe': '20.5',
+                    'roce': '24.0',
+                    'opm': '18.0',
+                    'ev_ebitda': '14.5',
+                })
 
-    metrics_data_payload = {
-        'market_cap': {1: str(market_cap_cr) if market_cap_cr > 0 else ''},
-        'pe_ratio': {1: str(pe_ratio) if pe_ratio > 0 else ''},
-        'roe': {1: str(roe) if roe > 0 else ''},
-        'roce': {1: str(roce) if roce > 0 else ''},
-        'opm': {1: str(opm) if opm > 0 else ''},
-        'ev_ebitda': {1: str(ev_ebitda) if ev_ebitda > 0 else ''},
-    }
-    # Populate Peer 1 (id 2) and Peer 2 (id 3) fundamentals
-    for p_idx, p_data in enumerate(peer_metrics_list, start=2):
-        metrics_data_payload['market_cap'][p_idx] = str(p_data.get('market_cap', ''))
-        metrics_data_payload['pe_ratio'][p_idx] = str(p_data.get('pe_ratio', ''))
-        metrics_data_payload['roe'][p_idx] = str(p_data.get('roe', ''))
-        metrics_data_payload['roce'][p_idx] = str(p_data.get('roce', ''))
-        metrics_data_payload['opm'][p_idx] = str(p_data.get('opm', ''))
-        metrics_data_payload['ev_ebitda'][p_idx] = str(p_data.get('ev_ebitda', ''))
-
-    # AI Intelligence Generation (using Groq LLaMA-3.3 if available)
-    business_overview = (
-        f"{short_name} is a leading player in {industry_sector_val or 'the market'}. "
-        f"The company commands deep domain capabilities across large enterprise transformations, expansion, and managed operations. "
-        f"Key structural MOAT drivers include long-standing client relationships, mission-critical workflow integration, high switching costs, and strong pipeline momentum."
-    )
-
-    valuation_thesis = (
-        f"At CMP of ₹{current_price}, {short_name} is trading at a P/E multiple of {pe_ratio}x and EV/EBITDA of {ev_ebitda}x, offering an attractive valuation compared to industry benchmarks. "
-        f"With sustainable OPM margins of {opm}% and ROE of {roe}%, ongoing margin optimization and operational leverage provide robust headroom for multiple re-rating. "
-        f"We assign a '{recommendation}' rating with a 12-month Target Price of ₹{target_price} (upside of ~{upside_pct}%)."
-    )
-
-    technical_analysis = (
-        f"On technical charts, the stock has established strong structural support near ₹{round(current_price * 0.92, 2)} and is consolidating constructively above its moving averages. "
-        f"The 52-week range stands at ₹{low_52} - ₹{high_52}. Momentum indicators indicate steady accumulation with breakout confirmation projected on a sustained move above ₹{round(current_price * 1.06, 2)} towards ₹{target_price}."
-    )
-
-    groq_api_key = os.environ.get('GROQ_API_KEY')
-    if groq_api_key:
-        try:
-            from groq import Groq
-            client = Groq(api_key=groq_api_key)
-            prompt = (
-                f"You are an elite Wall Street / Dalal Street equity research analyst. "
-                f"Analyze stock: {short_name} ({sym}) in sector: {industry_sector_val or 'Equities'}. "
-                f"Live data: CMP=INR {current_price}, 52W High={high_52}, 52W Low={low_52}, "
-                f"Market Cap=INR {market_cap_cr} Cr, P/E={pe_ratio}, ROE={roe}%, OPM={opm}%, EV/EBITDA={ev_ebitda}. "
-                f"Provide concise institutional commentary in JSON format with keys: "
-                f"'business_overview' (2-3 sentences on MOAT and competitive advantage), "
-                f"'valuation_thesis' (2-3 sentences on valuation discount/upside rationale), "
-                f"'technical_analysis' (2 sentences on technical momentum, support/resistance, and targets)."
-            )
-            completion = client.chat.completions.create(
-                model='llama-3.3-70b-versatile',
-                messages=[
-                    {'role': 'system', 'content': 'You are a senior institutional equity research compiler. Return valid JSON only.'},
-                    {'role': 'user', 'content': prompt}
-                ],
-                response_format={'type': 'json_object'},
-                timeout=6
-            )
-            ai_data = json.loads(completion.choices[0].message.content)
-            if ai_data.get('business_overview'):
-                business_overview = ai_data['business_overview']
-            if ai_data.get('valuation_thesis'):
-                valuation_thesis = ai_data['valuation_thesis']
-            if ai_data.get('technical_analysis'):
-                technical_analysis = ai_data['technical_analysis']
-        except Exception:
-            pass
-
-    today_str = timezone.now().strftime('%d/%m/%Y')
-    consensus_rows_payload = [
-        {'id': 1, 'callDate': today_str, 'brokerageHouse': '', 'rating': recommendation, 'targetPrice': str(target_price) if target_price else ''},
-    ]
-
-    # Pre-calculated Multi-Mode Datasets for Seamless Switching
-    rev_base = round(market_cap_cr * 0.55, 2) if market_cap_cr > 0 else 2400.0
-    ebitda_base = round(rev_base * (opm / 100), 2)
-    pat_base = round(ebitda_base * 0.68, 2)
-    eps_base = round(current_price / pe_ratio, 2) if pe_ratio > 0 else 18.5
-
-    historical_payload = {
-        'columns': [
-            {'id': 101, 'label': 'FY21'},
-            {'id': 102, 'label': 'FY22'},
-            {'id': 103, 'label': 'FY23'},
-            {'id': 104, 'label': 'FY24'},
-            {'id': 105, 'label': 'FY25 (Est)'},
-        ],
-        'metrics': [
-            {'key': 'revenue', 'label': 'Revenue from Ops (Cr)'},
-            {'key': 'ebitda', 'label': 'EBITDA (Cr)'},
-            {'key': 'opm', 'label': 'EBITDA Margin (%)'},
-            {'key': 'pat', 'label': 'Net Profit / PAT (Cr)'},
-            {'key': 'eps', 'label': 'EPS (₹)'},
-            {'key': 'roe', 'label': 'ROE (%)'},
-            {'key': 'roce', 'label': 'ROCE (%)'},
-        ],
-        'data': {
-            'revenue': {101: str(round(rev_base * 0.65, 2)), 102: str(round(rev_base * 0.78, 2)), 103: str(round(rev_base * 0.89, 2)), 104: str(round(rev_base, 2)), 105: str(round(rev_base * 1.16, 2)), 1: str(round(rev_base * 0.65, 2)), 2: str(round(rev_base * 0.78, 2)), 3: str(round(rev_base * 0.89, 2)), 4: str(round(rev_base, 2)), 5: str(round(rev_base * 1.16, 2))},
-            'ebitda': {101: str(round(ebitda_base * 0.62, 2)), 102: str(round(ebitda_base * 0.75, 2)), 103: str(round(ebitda_base * 0.88, 2)), 104: str(round(ebitda_base, 2)), 105: str(round(ebitda_base * 1.18, 2)), 1: str(round(ebitda_base * 0.62, 2)), 2: str(round(ebitda_base * 0.75, 2)), 3: str(round(ebitda_base * 0.88, 2)), 4: str(round(ebitda_base, 2)), 5: str(round(ebitda_base * 1.18, 2))},
-            'opm': {101: str(round(opm * 0.92, 1)), 102: str(round(opm * 0.95, 1)), 103: str(round(opm * 0.98, 1)), 104: str(round(opm, 1)), 105: str(round(opm * 1.05, 1)), 1: str(round(opm * 0.92, 1)), 2: str(round(opm * 0.95, 1)), 3: str(round(opm * 0.98, 1)), 4: str(round(opm, 1)), 5: str(round(opm * 1.05, 1))},
-            'pat': {101: str(round(pat_base * 0.60, 2)), 102: str(round(pat_base * 0.74, 2)), 103: str(round(pat_base * 0.87, 2)), 104: str(round(pat_base, 2)), 105: str(round(pat_base * 1.20, 2)), 1: str(round(pat_base * 0.60, 2)), 2: str(round(pat_base * 0.74, 2)), 3: str(round(pat_base * 0.87, 2)), 4: str(round(pat_base, 2)), 5: str(round(pat_base * 1.20, 2))},
-            'eps': {101: str(round(eps_base * 0.60, 2)), 102: str(round(eps_base * 0.74, 2)), 103: str(round(eps_base * 0.87, 2)), 104: str(round(eps_base, 2)), 105: str(round(eps_base * 1.20, 2)), 1: str(round(eps_base * 0.60, 2)), 2: str(round(eps_base * 0.74, 2)), 3: str(round(eps_base * 0.87, 2)), 4: str(round(eps_base, 2)), 5: str(round(eps_base * 1.20, 2))},
-            'roe': {101: str(round(roe * 0.90, 1)), 102: str(round(roe * 0.94, 1)), 103: str(round(roe * 0.97, 1)), 104: str(round(roe, 1)), 105: str(round(roe * 1.06, 1)), 1: str(round(roe * 0.90, 1)), 2: str(round(roe * 0.94, 1)), 3: str(round(roe * 0.97, 1)), 4: str(round(roe, 1)), 5: str(round(roe * 1.06, 1))},
-            'roce': {101: str(round(roce * 0.90, 1)), 102: str(round(roce * 0.94, 1)), 103: str(round(roce * 0.97, 1)), 104: str(round(roce, 1)), 105: str(round(roce * 1.06, 1)), 1: str(round(roce * 0.90, 1)), 2: str(round(roce * 0.94, 1)), 3: str(round(roce * 0.97, 1)), 4: str(round(roce, 1)), 5: str(round(roce * 1.06, 1))},
+        # Prepare Peers Table Structure with Full Company Names
+        peers_payload = [
+            {'id': 1, 'label': 'Target Company'},
+            {'id': 2, 'label': 'Peer 1'},
+            {'id': 3, 'label': 'Peer 2'},
+        ]
+        peer_names_payload = {
+            1: f"{short_name} (TARGET)",
+            2: peer_metrics_list[0]['name'] if len(peer_metrics_list) > 0 else 'Peer 1',
+            3: peer_metrics_list[1]['name'] if len(peer_metrics_list) > 1 else 'Peer 2',
         }
-    }
 
-    benchmark_payload = {
-        'columns': [
-            {'id': 201, 'label': f"{short_name} (Target)"},
-            {'id': 202, 'label': 'Sector Median'},
-            {'id': 203, 'label': 'Top Quartile (P75)'},
-            {'id': 204, 'label': 'Sector Low (P25)'},
-        ],
-        'metrics': [
-            {'key': 'pe_ratio', 'label': 'P/E Multiple (x)'},
-            {'key': 'ev_ebitda', 'label': 'EV / EBITDA (x)'},
-            {'key': 'roe', 'label': 'Return on Equity (ROE %)'},
-            {'key': 'opm', 'label': 'Operating Margin (OPM %)'},
-            {'key': 'pb_ratio', 'label': 'Price to Book (P/B)'},
-            {'key': 'debt_equity', 'label': 'Debt to Equity (x)'},
-        ],
-        'data': {
-            'pe_ratio': {201: str(pe_ratio), 202: str(round(pe_ratio * 1.12, 1)), 203: str(round(pe_ratio * 1.35, 1)), 204: str(round(pe_ratio * 0.80, 1)), 1: str(pe_ratio), 2: str(round(pe_ratio * 1.12, 1)), 3: str(round(pe_ratio * 1.35, 1)), 4: str(round(pe_ratio * 0.80, 1))},
-            'ev_ebitda': {201: str(ev_ebitda), 202: str(round(ev_ebitda * 1.10, 1)), 203: str(round(ev_ebitda * 1.30, 1)), 204: str(round(ev_ebitda * 0.78, 1)), 1: str(ev_ebitda), 2: str(round(ev_ebitda * 1.10, 1)), 3: str(round(ev_ebitda * 1.30, 1)), 4: str(round(ev_ebitda * 0.78, 1))},
-            'roe': {201: str(roe), 202: str(round(roe * 0.92, 1)), 203: str(round(roe * 1.25, 1)), 204: str(round(roe * 0.65, 1)), 1: str(roe), 2: str(round(roe * 0.92, 1)), 3: str(round(roe * 1.25, 1)), 4: str(round(roe * 0.65, 1))},
-            'opm': {201: str(opm), 202: str(round(opm * 0.95, 1)), 203: str(round(opm * 1.20, 1)), 204: str(round(opm * 0.70, 1)), 1: str(opm), 2: str(round(opm * 0.95, 1)), 3: str(round(opm * 1.20, 1)), 4: str(round(opm * 0.70, 1))},
-            'pb_ratio': {201: str(round(pe_ratio * 0.16, 2)), 202: str(round(pe_ratio * 0.18, 2)), 203: str(round(pe_ratio * 0.24, 2)), 204: str(round(pe_ratio * 0.11, 2)), 1: str(round(pe_ratio * 0.16, 2)), 2: str(round(pe_ratio * 0.18, 2)), 3: str(round(pe_ratio * 0.24, 2)), 4: str(round(pe_ratio * 0.11, 2))},
-            'debt_equity': {201: '0.12', 202: '0.45', 203: '0.10', 204: '0.85', 1: '0.12', 2: '0.45', 3: '0.10', 4: '0.85'},
+        metrics_data_payload = {
+            'market_cap': {1: str(market_cap_cr) if market_cap_cr > 0 else ''},
+            'pe_ratio': {1: str(pe_ratio) if pe_ratio > 0 else ''},
+            'roe': {1: str(roe) if roe > 0 else ''},
+            'roce': {1: str(roce) if roce > 0 else ''},
+            'opm': {1: str(opm) if opm > 0 else ''},
+            'ev_ebitda': {1: str(ev_ebitda) if ev_ebitda > 0 else ''},
         }
-    }
+        # Populate Peer 1 (id 2) and Peer 2 (id 3) fundamentals
+        for p_idx, p_data in enumerate(peer_metrics_list, start=2):
+            metrics_data_payload['market_cap'][p_idx] = str(p_data.get('market_cap', ''))
+            metrics_data_payload['pe_ratio'][p_idx] = str(p_data.get('pe_ratio', ''))
+            metrics_data_payload['roe'][p_idx] = str(p_data.get('roe', ''))
+            metrics_data_payload['roce'][p_idx] = str(p_data.get('roce', ''))
+            metrics_data_payload['opm'][p_idx] = str(p_data.get('opm', ''))
+            metrics_data_payload['ev_ebitda'][p_idx] = str(p_data.get('ev_ebitda', ''))
 
-    dcf_val_base = target_price
-    dcf_val_bull = round(target_price * 1.20, 2)
-    dcf_val_cons = round(current_price * 1.05, 2)
-    margin_safety = round(((dcf_val_base - current_price) / dcf_val_base) * 100, 1)
+        # AI Intelligence Generation (using Groq LLaMA-3.3 if available)
+        business_overview = (
+            f"{short_name} is a leading player in {industry_sector_val or 'the market'}. "
+            f"The company commands deep domain capabilities across large enterprise transformations, expansion, and managed operations. "
+            f"Key structural MOAT drivers include long-standing client relationships, mission-critical workflow integration, high switching costs, and strong pipeline momentum."
+        )
 
-    dcf_payload = {
-        'columns': [
-            {'id': 301, 'label': 'Conservative Case'},
-            {'id': 302, 'label': 'Base Case (WisBees)'},
-            {'id': 303, 'label': 'Bull Case'},
-        ],
-        'metrics': [
-            {'key': 'wacc', 'label': 'WACC / Discount Rate (%)'},
-            {'key': 'terminal_growth', 'label': 'Terminal Growth Rate (%)'},
-            {'key': 'revenue_cagr', 'label': '5Y Revenue CAGR (%)'},
-            {'key': 'ebitda_margin', 'label': 'Projected EBITDA Margin (%)'},
-            {'key': 'fair_value', 'label': 'Implied Intrinsic Value (₹)'},
-            {'key': 'cmp', 'label': 'Current Market Price (₹)'},
-            {'key': 'margin_safety', 'label': 'Margin of Safety (%)'},
-        ],
-        'data': {
-            'wacc': {301: '13.5%', 302: '12.0%', 303: '10.5%', 1: '13.5%', 2: '12.0%', 3: '10.5%'},
-            'terminal_growth': {301: '4.0%', 302: '5.0%', 303: '6.0%', 1: '4.0%', 2: '5.0%', 3: '6.0%'},
-            'revenue_cagr': {301: '10.5%', 302: '15.0%', 303: '20.0%', 1: '10.5%', 2: '15.0%', 3: '20.0%'},
-            'ebitda_margin': {301: f"{round(opm * 0.9, 1)}%", 302: f"{opm}%", 303: f"{round(opm * 1.15, 1)}%", 1: f"{round(opm * 0.9, 1)}%", 2: f"{opm}%", 3: f"{round(opm * 1.15, 1)}%"},
-            'fair_value': {301: str(dcf_val_cons), 302: str(dcf_val_base), 303: str(dcf_val_bull), 1: str(dcf_val_cons), 2: str(dcf_val_base), 3: str(dcf_val_bull)},
-            'cmp': {301: str(current_price), 302: str(current_price), 303: str(current_price), 1: str(current_price), 2: str(current_price), 3: str(current_price)},
-            'margin_safety': {301: f"{round(((dcf_val_cons - current_price)/dcf_val_cons)*100, 1)}%", 302: f"{margin_safety}%", 303: f"{round(((dcf_val_bull - current_price)/dcf_val_bull)*100, 1)}%", 1: f"{round(((dcf_val_cons - current_price)/dcf_val_cons)*100, 1)}%", 2: f"{margin_safety}%", 3: f"{round(((dcf_val_bull - current_price)/dcf_val_bull)*100, 1)}%"},
+        valuation_thesis = (
+            f"At CMP of ₹{current_price}, {short_name} is trading at a P/E multiple of {pe_ratio}x and EV/EBITDA of {ev_ebitda}x, offering an attractive valuation compared to industry benchmarks. "
+            f"With sustainable OPM margins of {opm}% and ROE of {roe}%, ongoing margin optimization and operational leverage provide robust headroom for multiple re-rating. "
+            f"We assign a '{recommendation}' rating with a 12-month Target Price of ₹{target_price} (upside of ~{upside_pct}%)."
+        )
+
+        technical_analysis = (
+            f"On technical charts, the stock has established strong structural support near ₹{round(current_price * 0.92, 2)} and is consolidating constructively above its moving averages. "
+            f"The 52-week range stands at ₹{low_52} - ₹{high_52}. Momentum indicators indicate steady accumulation with breakout confirmation projected on a sustained move above ₹{round(current_price * 1.06, 2)} towards ₹{target_price}."
+        )
+
+        groq_api_key = os.environ.get('GROQ_API_KEY')
+        if groq_api_key:
+            try:
+                from groq import Groq
+                client = Groq(api_key=groq_api_key)
+                prompt = (
+                    f"You are an elite Wall Street / Dalal Street equity research analyst. "
+                    f"Analyze stock: {short_name} ({sym}) in sector: {industry_sector_val or 'Equities'}. "
+                    f"Live data: CMP=INR {current_price}, 52W High={high_52}, 52W Low={low_52}, "
+                    f"Market Cap=INR {market_cap_cr} Cr, P/E={pe_ratio}, ROE={roe}%, OPM={opm}%, EV/EBITDA={ev_ebitda}. "
+                    f"Provide concise institutional commentary in JSON format with keys: "
+                    f"'business_overview' (2-3 sentences on MOAT and competitive advantage), "
+                    f"'valuation_thesis' (2-3 sentences on valuation discount/upside rationale), "
+                    f"'technical_analysis' (2 sentences on technical momentum, support/resistance, and targets)."
+                )
+                completion = client.chat.completions.create(
+                    model='llama-3.3-70b-versatile',
+                    messages=[
+                        {'role': 'system', 'content': 'You are a senior institutional equity research compiler. Return valid JSON only.'},
+                        {'role': 'user', 'content': prompt}
+                    ],
+                    response_format={'type': 'json_object'},
+                    timeout=6
+                )
+                ai_data = json.loads(completion.choices[0].message.content)
+                if ai_data.get('business_overview'):
+                    business_overview = ai_data['business_overview']
+                if ai_data.get('valuation_thesis'):
+                    valuation_thesis = ai_data['valuation_thesis']
+                if ai_data.get('technical_analysis'):
+                    technical_analysis = ai_data['technical_analysis']
+            except Exception:
+                pass
+
+        today_str = timezone.now().strftime('%d/%m/%Y')
+        consensus_rows_payload = [
+            {'id': 1, 'callDate': today_str, 'brokerageHouse': '', 'rating': recommendation, 'targetPrice': str(target_price) if target_price else ''},
+        ]
+
+        # Pre-calculated Multi-Mode Datasets for Seamless Switching
+        rev_base = round(market_cap_cr * 0.55, 2) if market_cap_cr > 0 else 2400.0
+        ebitda_base = round(rev_base * (opm / 100), 2)
+        pat_base = round(ebitda_base * 0.68, 2)
+        eps_base = round(current_price / pe_ratio, 2) if pe_ratio > 0 else 18.5
+
+        historical_payload = {
+            'columns': [
+                {'id': 101, 'label': 'FY21'},
+                {'id': 102, 'label': 'FY22'},
+                {'id': 103, 'label': 'FY23'},
+                {'id': 104, 'label': 'FY24'},
+                {'id': 105, 'label': 'FY25 (Est)'},
+            ],
+            'metrics': [
+                {'key': 'revenue', 'label': 'Revenue from Ops (Cr)'},
+                {'key': 'ebitda', 'label': 'EBITDA (Cr)'},
+                {'key': 'opm', 'label': 'EBITDA Margin (%)'},
+                {'key': 'pat', 'label': 'Net Profit / PAT (Cr)'},
+                {'key': 'eps', 'label': 'EPS (₹)'},
+                {'key': 'roe', 'label': 'ROE (%)'},
+                {'key': 'roce', 'label': 'ROCE (%)'},
+            ],
+            'data': {
+                'revenue': {101: str(round(rev_base * 0.65, 2)), 102: str(round(rev_base * 0.78, 2)), 103: str(round(rev_base * 0.89, 2)), 104: str(round(rev_base, 2)), 105: str(round(rev_base * 1.16, 2)), 1: str(round(rev_base * 0.65, 2)), 2: str(round(rev_base * 0.78, 2)), 3: str(round(rev_base * 0.89, 2)), 4: str(round(rev_base, 2)), 5: str(round(rev_base * 1.16, 2))},
+                'ebitda': {101: str(round(ebitda_base * 0.62, 2)), 102: str(round(ebitda_base * 0.75, 2)), 103: str(round(ebitda_base * 0.88, 2)), 104: str(round(ebitda_base, 2)), 105: str(round(ebitda_base * 1.18, 2)), 1: str(round(ebitda_base * 0.62, 2)), 2: str(round(ebitda_base * 0.75, 2)), 3: str(round(ebitda_base * 0.88, 2)), 4: str(round(ebitda_base, 2)), 5: str(round(ebitda_base * 1.18, 2))},
+                'opm': {101: str(round(opm * 0.92, 1)), 102: str(round(opm * 0.95, 1)), 103: str(round(opm * 0.98, 1)), 104: str(round(opm, 1)), 105: str(round(opm * 1.05, 1)), 1: str(round(opm * 0.92, 1)), 2: str(round(opm * 0.95, 1)), 3: str(round(opm * 0.98, 1)), 4: str(round(opm, 1)), 5: str(round(opm * 1.05, 1))},
+                'pat': {101: str(round(pat_base * 0.60, 2)), 102: str(round(pat_base * 0.74, 2)), 103: str(round(pat_base * 0.87, 2)), 104: str(round(pat_base, 2)), 105: str(round(pat_base * 1.20, 2)), 1: str(round(pat_base * 0.60, 2)), 2: str(round(pat_base * 0.74, 2)), 3: str(round(pat_base * 0.87, 2)), 4: str(round(pat_base, 2)), 5: str(round(pat_base * 1.20, 2))},
+                'eps': {101: str(round(eps_base * 0.60, 2)), 102: str(round(eps_base * 0.74, 2)), 103: str(round(eps_base * 0.87, 2)), 104: str(round(eps_base, 2)), 105: str(round(eps_base * 1.20, 2)), 1: str(round(eps_base * 0.60, 2)), 2: str(round(eps_base * 0.74, 2)), 3: str(round(eps_base * 0.87, 2)), 4: str(round(eps_base, 2)), 5: str(round(eps_base * 1.20, 2))},
+                'roe': {101: str(round(roe * 0.90, 1)), 102: str(round(roe * 0.94, 1)), 103: str(round(roe * 0.97, 1)), 104: str(round(roe, 1)), 105: str(round(roe * 1.06, 1)), 1: str(round(roe * 0.90, 1)), 2: str(round(roe * 0.94, 1)), 3: str(round(roe * 0.97, 1)), 4: str(round(roe, 1)), 5: str(round(roe * 1.06, 1))},
+                'roce': {101: str(round(roce * 0.90, 1)), 102: str(round(roce * 0.94, 1)), 103: str(round(roce * 0.97, 1)), 104: str(round(roce, 1)), 105: str(round(roce * 1.06, 1)), 1: str(round(roce * 0.90, 1)), 2: str(round(roce * 0.94, 1)), 3: str(round(roce * 0.97, 1)), 4: str(round(roce, 1)), 5: str(round(roce * 1.06, 1))},
+            }
         }
-    }
 
-    return JsonResponse({
-        'success': True,
-        'stockQuery': sym,
-        'companyName': short_name,
-        'ticker': sym,
-        'currentPrice': str(current_price),
-        'priceAsOn': timezone.now().strftime('%Y-%m-%d'),
-        'targetPrice': str(target_price),
-        'recommendation': recommendation,
-        'compMode': 'Peer Comparison (Target Co. vs Peers)',
-        'industrySector': industry_sector_val,
-        'timeHorizon': '',
-        'peers': peers_payload,
-        'peerNames': peer_names_payload,
-        'metricsData': metrics_data_payload,
-        'historicalData': historical_payload,
-        'benchmarkData': benchmark_payload,
-        'dcfData': dcf_payload,
-        'businessOverview': business_overview,
-        'valuationThesis': valuation_thesis,
-        'technicalAnalysis': technical_analysis,
-        'consensusRows': consensus_rows_payload,
-    })
+        benchmark_payload = {
+            'columns': [
+                {'id': 201, 'label': f"{short_name} (Target)"},
+                {'id': 202, 'label': 'Sector Median'},
+                {'id': 203, 'label': 'Top Quartile (P75)'},
+                {'id': 204, 'label': 'Sector Low (P25)'},
+            ],
+            'metrics': [
+                {'key': 'pe_ratio', 'label': 'P/E Multiple (x)'},
+                {'key': 'ev_ebitda', 'label': 'EV / EBITDA (x)'},
+                {'key': 'roe', 'label': 'Return on Equity (ROE %)'},
+                {'key': 'opm', 'label': 'Operating Margin (OPM %)'},
+                {'key': 'pb_ratio', 'label': 'Price to Book (P/B)'},
+                {'key': 'debt_equity', 'label': 'Debt to Equity (x)'},
+            ],
+            'data': {
+                'pe_ratio': {201: str(pe_ratio), 202: str(round(pe_ratio * 1.12, 1)), 203: str(round(pe_ratio * 1.35, 1)), 204: str(round(pe_ratio * 0.80, 1)), 1: str(pe_ratio), 2: str(round(pe_ratio * 1.12, 1)), 3: str(round(pe_ratio * 1.35, 1)), 4: str(round(pe_ratio * 0.80, 1))},
+                'ev_ebitda': {201: str(ev_ebitda), 202: str(round(ev_ebitda * 1.10, 1)), 203: str(round(ev_ebitda * 1.30, 1)), 204: str(round(ev_ebitda * 0.78, 1)), 1: str(ev_ebitda), 2: str(round(ev_ebitda * 1.10, 1)), 3: str(round(ev_ebitda * 1.30, 1)), 4: str(round(ev_ebitda * 0.78, 1))},
+                'roe': {201: str(roe), 202: str(round(roe * 0.92, 1)), 203: str(round(roe * 1.25, 1)), 204: str(round(roe * 0.65, 1)), 1: str(roe), 2: str(round(roe * 0.92, 1)), 3: str(round(roe * 1.25, 1)), 4: str(round(roe * 0.65, 1))},
+                'opm': {201: str(opm), 202: str(round(opm * 0.95, 1)), 203: str(round(opm * 1.20, 1)), 204: str(round(opm * 0.70, 1)), 1: str(opm), 2: str(round(opm * 0.95, 1)), 3: str(round(opm * 1.20, 1)), 4: str(round(opm * 0.70, 1))},
+                'pb_ratio': {201: str(round(pe_ratio * 0.16, 2)), 202: str(round(pe_ratio * 0.18, 2)), 203: str(round(pe_ratio * 0.24, 2)), 204: str(round(pe_ratio * 0.11, 2)), 1: str(round(pe_ratio * 0.16, 2)), 2: str(round(pe_ratio * 0.18, 2)), 3: str(round(pe_ratio * 0.24, 2)), 4: str(round(pe_ratio * 0.11, 2))},
+                'debt_equity': {201: '0.12', 202: '0.45', 203: '0.10', 204: '0.85', 1: '0.12', 2: '0.45', 3: '0.10', 4: '0.85'},
+            }
+        }
+
+        dcf_val_base = target_price
+        dcf_val_bull = round(target_price * 1.20, 2)
+        dcf_val_cons = round(current_price * 1.05, 2)
+        margin_safety = round(((dcf_val_base - current_price) / dcf_val_base) * 100, 1)
+
+        dcf_payload = {
+            'columns': [
+                {'id': 301, 'label': 'Conservative Case'},
+                {'id': 302, 'label': 'Base Case (WisBees)'},
+                {'id': 303, 'label': 'Bull Case'},
+            ],
+            'metrics': [
+                {'key': 'wacc', 'label': 'WACC / Discount Rate (%)'},
+                {'key': 'terminal_growth', 'label': 'Terminal Growth Rate (%)'},
+                {'key': 'revenue_cagr', 'label': '5Y Revenue CAGR (%)'},
+                {'key': 'ebitda_margin', 'label': 'Projected EBITDA Margin (%)'},
+                {'key': 'fair_value', 'label': 'Implied Intrinsic Value (₹)'},
+                {'key': 'cmp', 'label': 'Current Market Price (₹)'},
+                {'key': 'margin_safety', 'label': 'Margin of Safety (%)'},
+            ],
+            'data': {
+                'wacc': {301: '13.5%', 302: '12.0%', 303: '10.5%', 1: '13.5%', 2: '12.0%', 3: '10.5%'},
+                'terminal_growth': {301: '4.0%', 302: '5.0%', 303: '6.0%', 1: '4.0%', 2: '5.0%', 3: '6.0%'},
+                'revenue_cagr': {301: '10.5%', 302: '15.0%', 303: '20.0%', 1: '10.5%', 2: '15.0%', 3: '20.0%'},
+                'ebitda_margin': {301: f"{round(opm * 0.9, 1)}%", 302: f"{opm}%", 303: f"{round(opm * 1.15, 1)}%", 1: f"{round(opm * 0.9, 1)}%", 2: f"{opm}%", 3: f"{round(opm * 1.15, 1)}%"},
+                'fair_value': {301: str(dcf_val_cons), 302: str(dcf_val_base), 303: str(dcf_val_bull), 1: str(dcf_val_cons), 2: str(dcf_val_base), 3: str(dcf_val_bull)},
+                'cmp': {301: str(current_price), 302: str(current_price), 303: str(current_price), 1: str(current_price), 2: str(current_price), 3: str(current_price)},
+                'margin_safety': {301: f"{round(((dcf_val_cons - current_price)/dcf_val_cons)*100, 1)}%", 302: f"{margin_safety}%", 303: f"{round(((dcf_val_bull - current_price)/dcf_val_bull)*100, 1)}%", 1: f"{round(((dcf_val_cons - current_price)/dcf_val_cons)*100, 1)}%", 2: f"{margin_safety}%", 3: f"{round(((dcf_val_bull - current_price)/dcf_val_bull)*100, 1)}%"},
+            }
+        }
+
+        return JsonResponse({
+            'success': True,
+            'stockQuery': sym,
+            'companyName': short_name,
+            'ticker': sym,
+            'currentPrice': str(current_price),
+            'priceAsOn': timezone.now().strftime('%Y-%m-%d'),
+            'targetPrice': str(target_price),
+            'recommendation': recommendation,
+            'compMode': 'Peer Comparison (Target Co. vs Peers)',
+            'industrySector': industry_sector_val,
+            'timeHorizon': '',
+            'peers': peers_payload,
+            'peerNames': peer_names_payload,
+            'metricsData': metrics_data_payload,
+            'historicalData': historical_payload,
+            'benchmarkData': benchmark_payload,
+            'dcfData': dcf_payload,
+            'businessOverview': business_overview,
+            'valuationThesis': valuation_thesis,
+            'technicalAnalysis': technical_analysis,
+            'consensusRows': consensus_rows_payload,
+        })
+    except Exception as exc:
+        import traceback
+        traceback.print_exc()
+        return JsonResponse({
+            'success': False,
+            'error': f'Failed to process stock data for "{query}": {str(exc)}'
+        }, status=500)
+
 
 
 # ─────────────────────────────────────────────────────────────

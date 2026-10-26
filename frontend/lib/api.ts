@@ -33,6 +33,29 @@ export const getOpsBaseUrl = () => {
   return 'https://operation-r9e5.onrender.com/api';
 };
 
+/**
+ * Resilient JSON fetch that gracefully parses responses and prevents
+ * "Unexpected token '<', '<!DOCTYPE '... is not valid JSON" errors.
+ */
+export async function safeJsonFetch(url: string, options?: RequestInit): Promise<any> {
+  const res = await fetch(url, options);
+  const text = await res.text();
+  let data: any = {};
+  try {
+    data = JSON.parse(text);
+  } catch {
+    if (!res.ok) {
+      throw new Error(`Server returned HTTP ${res.status}. The backend service may be starting or unavailable.`);
+    }
+    throw new Error('Server returned an unexpected non-JSON response.');
+  }
+  if (!res.ok) {
+    throw new Error(data?.error || `Request failed with HTTP ${res.status}`);
+  }
+  return data;
+}
+
+
 export const rawAxios = axios.create({
   baseURL: getOpsBaseUrl(),
   withCredentials: true,
