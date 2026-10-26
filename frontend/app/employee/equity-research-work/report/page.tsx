@@ -381,6 +381,59 @@ export default function EquityResearchReportPage() {
     }
   }, []);
 
+  // ── Print Mode Isolation (Neutralize Dark Mode -> Pure White Paper) ──
+  const preparePrintMode = () => {
+    if (typeof document === 'undefined') return;
+    const root = document.documentElement;
+    const body = document.body;
+    const isDark =
+      root.classList.contains('dark') ||
+      body?.classList.contains('dark') ||
+      root.getAttribute('data-theme') === 'dark';
+
+    if (isDark) {
+      (window as any).__er_was_dark = true;
+      root.classList.remove('dark');
+      body?.classList.remove('dark');
+      root.setAttribute('data-theme', 'light');
+      root.style.setProperty('color-scheme', 'light', 'important');
+      if (body) {
+        body.style.setProperty('color-scheme', 'light', 'important');
+        body.style.setProperty('background-color', '#ffffff', 'important');
+      }
+    }
+  };
+
+  const restorePrintMode = () => {
+    if (typeof document === 'undefined') return;
+    if ((window as any).__er_was_dark) {
+      delete (window as any).__er_was_dark;
+      const root = document.documentElement;
+      const body = document.body;
+      root.classList.add('dark');
+      body?.classList.add('dark');
+      root.setAttribute('data-theme', 'dark');
+      root.style.removeProperty('color-scheme');
+      if (body) {
+        body.style.removeProperty('color-scheme');
+        body.style.removeProperty('background-color');
+      }
+    }
+  };
+
+  useEffect(() => {
+    const handleBefore = () => preparePrintMode();
+    const handleAfter = () => restorePrintMode();
+
+    window.addEventListener('beforeprint', handleBefore);
+    window.addEventListener('afterprint', handleAfter);
+
+    return () => {
+      window.removeEventListener('beforeprint', handleBefore);
+      window.removeEventListener('afterprint', handleAfter);
+    };
+  }, []);
+
   const handlePrint = () => {
     // Disable edit outline during print
     const wasEditable = isEditable;
@@ -388,13 +441,16 @@ export default function EquityResearchReportPage() {
       setIsEditable(false);
     }
 
+    // Isolate print canvas to clean pure white paper mode
+    preparePrintMode();
+
     const origTitle = typeof document !== 'undefined' ? document.title : '';
     const cleanCompany = (resolvedCompanyName || stockSymbol || 'Equity_Research').replace(/[^a-zA-Z0-9]/g, '_');
     if (typeof document !== 'undefined') {
       document.title = `WisBees_Research_${cleanCompany}_${priceAsOn || ''}`;
     }
 
-    // Allow state to apply before opening print dialog
+    // Allow DOM and state to apply before opening print dialog
     setTimeout(() => {
       window.print();
       setTimeout(() => {
@@ -404,8 +460,9 @@ export default function EquityResearchReportPage() {
         if (wasEditable) {
           setIsEditable(true);
         }
+        restorePrintMode();
       }, 500);
-    }, 60);
+    }, 100);
   };
 
   // ── Export Dossier JSON ──
@@ -765,7 +822,33 @@ export default function EquityResearchReportPage() {
       {/* ── Scoped Print Styles ── */}
       <style dangerouslySetInnerHTML={{ __html: `
         @media print {
-          /* 1. Reset Root Canvas to Pure White */
+          /* 1. Reset Root Canvas to Pure White & Light Color Scheme */
+          :root,
+          html,
+          html.dark,
+          html[data-theme="dark"],
+          body,
+          body.dark,
+          body.dark *,
+          [data-theme="dark"] {
+            color-scheme: light !important;
+            --bg-main: #ffffff !important;
+            --bg-subtle: #ffffff !important;
+            --card-bg: #ffffff !important;
+            --card-border: #cbd5e1 !important;
+            --card-hover: #ffffff !important;
+            --header-bg: #ffffff !important;
+            --text-primary: #0f172a !important;
+            --text-secondary: #334155 !important;
+            --text-muted: #64748b !important;
+            --input-bg: #ffffff !important;
+            --input-border: #cbd5e1 !important;
+            --hover-bg: #f8fafc !important;
+            background: #ffffff !important;
+            background-color: #ffffff !important;
+            color: #0f172a !important;
+          }
+
           html,
           body {
             background: #ffffff !important;
@@ -839,6 +922,7 @@ export default function EquityResearchReportPage() {
           @page {
             size: A4 portrait;
             margin: 12mm 14mm;
+            background: #ffffff !important;
           }
 
           /* 6. Page Breaks and Orphan Prevention */

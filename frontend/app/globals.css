@@ -121,7 +121,33 @@ body {
 
 /* ── Print Media Optimization ── */
 @media print {
-  /* 1. Global Reset to Pure White Canvas */
+  /* 1. Global Reset to Pure White Canvas & Light Color Scheme */
+  :root,
+  html,
+  html.dark,
+  html[data-theme="dark"],
+  body,
+  body.dark,
+  body.dark *,
+  [data-theme="dark"] {
+    color-scheme: light !important;
+    --bg-main: #ffffff !important;
+    --bg-subtle: #ffffff !important;
+    --card-bg: #ffffff !important;
+    --card-border: #cbd5e1 !important;
+    --card-hover: #ffffff !important;
+    --header-bg: #ffffff !important;
+    --text-primary: #0f172a !important;
+    --text-secondary: #334155 !important;
+    --text-muted: #64748b !important;
+    --input-bg: #ffffff !important;
+    --input-border: #cbd5e1 !important;
+    --hover-bg: #f8fafc !important;
+    background: #ffffff !important;
+    background-color: #ffffff !important;
+    color: #0f172a !important;
+  }
+
   html,
   body {
     background: #ffffff !important;
@@ -189,6 +215,7 @@ body {
   @page {
     size: A4 portrait;
     margin: 12mm 14mm;
+    background: #ffffff !important;
   }
 
   /* 6. Page Breaks and Orphan Prevention */
