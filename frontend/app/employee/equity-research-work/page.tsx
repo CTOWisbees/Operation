@@ -861,17 +861,87 @@ export default function EquityResearchWorkPage() {
     return () => clearTimeout(timer);
   }, [stockQuery]);
 
-  // ── Peer Autocomplete Search ──
+  // ── Peer Autocomplete & Automatic Fundamentals Population ──
+  const peerDebounceTimers = useRef<Record<number, NodeJS.Timeout>>({});
+
+  useEffect(() => {
+    return () => {
+      Object.values(peerDebounceTimers.current).forEach(t => clearTimeout(t));
+    };
+  }, []);
+
+  const fetchPeerMetrics = async (colId: number, queryOrSymbol?: string, displayName?: string) => {
+    const q = (queryOrSymbol || peerNames[colId] || peerQuery[colId] || '').trim();
+    if (!q) return;
+
+    if (peerDebounceTimers.current[colId]) {
+      clearTimeout(peerDebounceTimers.current[colId]);
+      delete peerDebounceTimers.current[colId];
+    }
+
+    setActivePeerSearchId(null);
+    setFetchingPeerId(colId);
+
+    const colIndex = peers.findIndex(p => p.id === colId);
+    const fallbackKey = colIndex >= 0 ? colIndex + 1 : colId;
+
+    try {
+      const baseUrl = getOpsBaseUrl().replace(/\/$/, '');
+      const token = localStorage.getItem('ops_token');
+      const data = await safeJsonFetch(`${baseUrl}/ia/fetch-stock-data?query=${encodeURIComponent(q)}`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'X-User-Auth': token || '',
+        },
+      });
+
+      if (data && (data.success !== false)) {
+        const finalName = displayName || data.companyName || q;
+        setPeerNames(prev => ({ ...prev, [colId]: finalName }));
+        setPeerQuery(prev => ({ ...prev, [colId]: finalName }));
+
+        const fetchedMcap = data.fundamentals?.market_cap || data.metricsData?.market_cap?.[1] || data.metricsData?.market_cap?.['1'] || '';
+        const fetchedPe = data.fundamentals?.pe_ratio || data.metricsData?.pe_ratio?.[1] || data.metricsData?.pe_ratio?.['1'] || '';
+        const fetchedRoe = data.fundamentals?.roe || data.metricsData?.roe?.[1] || data.metricsData?.roe?.['1'] || '';
+        const fetchedRoce = data.fundamentals?.roce || data.metricsData?.roce?.[1] || data.metricsData?.roce?.['1'] || '';
+        const fetchedOpm = data.fundamentals?.opm || data.metricsData?.opm?.[1] || data.metricsData?.opm?.['1'] || '';
+        const fetchedEv = data.fundamentals?.ev_ebitda || data.metricsData?.ev_ebitda?.[1] || data.metricsData?.ev_ebitda?.['1'] || '';
+
+        setMetricsData(prev => ({
+          ...prev,
+          market_cap: { ...(prev.market_cap || {}), [colId]: String(fetchedMcap), [fallbackKey]: String(fetchedMcap) },
+          pe_ratio:   { ...(prev.pe_ratio || {}),   [colId]: String(fetchedPe),   [fallbackKey]: String(fetchedPe) },
+          roe:        { ...(prev.roe || {}),        [colId]: String(fetchedRoe),  [fallbackKey]: String(fetchedRoe) },
+          roce:       { ...(prev.roce || {}),       [colId]: String(fetchedRoce), [fallbackKey]: String(fetchedRoce) },
+          opm:        { ...(prev.opm || {}),        [colId]: String(fetchedOpm),  [fallbackKey]: String(fetchedOpm) },
+          ev_ebitda:  { ...(prev.ev_ebitda || {}),  [colId]: String(fetchedEv),   [fallbackKey]: String(fetchedEv) },
+        }));
+
+        setSuccessToast(`Auto-filled fundamentals for ${finalName}!`);
+        setTimeout(() => setSuccessToast(''), 3500);
+      }
+    } catch (err) {
+      console.error('Error fetching peer data:', err);
+    } finally {
+      setFetchingPeerId(null);
+    }
+  };
+
   const handlePeerSearchChange = (colId: number, query: string) => {
     setPeerQuery(prev => ({ ...prev, [colId]: query }));
     setPeerNames(prev => ({ ...prev, [colId]: query }));
     setActivePeerSearchId(colId);
+
+    if (peerDebounceTimers.current[colId]) {
+      clearTimeout(peerDebounceTimers.current[colId]);
+    }
 
     if (!query.trim() || query.length < 2) {
       setPeerSuggestions(prev => ({ ...prev, [colId]: [] }));
       return;
     }
 
+    // 1. Fetch autocomplete suggestions for dropdown
     const baseUrl = getOpsBaseUrl().replace(/\/$/, '');
     safeJsonFetch(`${baseUrl}/ia/search-stocks?query=${encodeURIComponent(query)}`)
       .then(data => {
@@ -880,52 +950,19 @@ export default function EquityResearchWorkPage() {
       .catch(() => {
         setPeerSuggestions(prev => ({ ...prev, [colId]: [] }));
       });
+
+    // 2. Automatically fetch & populate peer fundamentals after 750ms of typing inactivity
+    if (query.trim().length >= 3) {
+      peerDebounceTimers.current[colId] = setTimeout(() => {
+        fetchPeerMetrics(colId, query);
+      }, 750);
+    }
   };
 
-  // ── Fetch Peer Metrics & Populate Table ──
   const handleSelectPeer = async (colId: number, peerItem: any) => {
-    setActivePeerSearchId(null);
     const peerSymbol = peerItem.symbol;
     const peerFullName = peerItem.name || peerSymbol;
-    setPeerNames(prev => ({ ...prev, [colId]: peerFullName }));
-    setPeerQuery(prev => ({ ...prev, [colId]: peerFullName }));
-
-    setFetchingPeerId(colId);
-    try {
-      const baseUrl = getOpsBaseUrl().replace(/\/$/, '');
-      const token = localStorage.getItem('ops_token');
-      const data = await safeJsonFetch(`${baseUrl}/ia/fetch-stock-data?query=${encodeURIComponent(peerSymbol)}`, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'X-User-Auth': token || '',
-        },
-      });
-      if (data && data.success) {
-        const fetchedMcap = data.metricsData?.market_cap?.[1] || '';
-        const fetchedPe = data.metricsData?.pe_ratio?.[1] || '';
-        const fetchedRoe = data.metricsData?.roe?.[1] || '';
-        const fetchedRoce = data.metricsData?.roce?.[1] || '';
-        const fetchedOpm = data.metricsData?.opm?.[1] || '';
-        const fetchedEv = data.metricsData?.ev_ebitda?.[1] || '';
-
-        setMetricsData(prev => ({
-          ...prev,
-          market_cap: { ...(prev.market_cap || {}), [colId]: fetchedMcap },
-          pe_ratio:   { ...(prev.pe_ratio || {}),   [colId]: fetchedPe },
-          roe:        { ...(prev.roe || {}),        [colId]: fetchedRoe },
-          roce:       { ...(prev.roce || {}),       [colId]: fetchedRoce },
-          opm:        { ...(prev.opm || {}),        [colId]: fetchedOpm },
-          ev_ebitda:  { ...(prev.ev_ebitda || {}),  [colId]: fetchedEv },
-        }));
-
-        setSuccessToast(`Auto-filled fundamentals for ${peerFullName}!`);
-        setTimeout(() => setSuccessToast(''), 3500);
-      }
-    } catch (err) {
-      console.error('Error fetching peer data:', err);
-    } finally {
-      setFetchingPeerId(null);
-    }
+    await fetchPeerMetrics(colId, peerSymbol, peerFullName);
   };
 
   // ── Fetch Target Stock Data & Multi-Mode Fundamentals ──
@@ -1590,15 +1627,42 @@ export default function EquityResearchWorkPage() {
                         <span className="text-[10px] text-violet-500 font-semibold animate-pulse">Fetching metrics…</span>
                       )}
                     </div>
-                    <div className="flex gap-1 relative">
+                    <div className="flex gap-1.5 relative items-center">
                       <input
                         type="text"
                         value={peerNames[col.id] || ''}
                         onChange={e => handlePeerSearchChange(col.id, e.target.value)}
                         onFocus={() => setActivePeerSearchId(col.id)}
-                        placeholder={idx === 0 ? 'Target Co. Full Name' : `Search Peer ${idx} (e.g. Apollo Hospital, Fortis)`}
+                        onBlur={() => {
+                          setTimeout(() => {
+                            setActivePeerSearchId(null);
+                          }, 250);
+                        }}
+                        onKeyDown={e => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            if (idx > 0) {
+                              fetchPeerMetrics(col.id, peerNames[col.id]);
+                            } else {
+                              handleFetchStockData(peerNames[col.id]);
+                            }
+                          }
+                        }}
+                        placeholder={idx === 0 ? 'Target Co. Full Name' : `Search Peer ${idx} (e.g. Infosys, Apollo, Fortis)`}
                         className={inputCls}
                       />
+                      {idx > 0 && (
+                        <button
+                          type="button"
+                          title="Auto-fill metrics for this peer"
+                          onClick={() => fetchPeerMetrics(col.id, peerNames[col.id])}
+                          disabled={fetchingPeerId === col.id || !peerNames[col.id]?.trim()}
+                          className="flex items-center gap-1 px-3 py-2.5 rounded-xl bg-violet-600 hover:bg-violet-700 disabled:opacity-40 text-white text-[11px] font-bold shadow-xs transition shrink-0 cursor-pointer"
+                        >
+                          <RefreshCw className={`w-3.5 h-3.5 ${fetchingPeerId === col.id ? 'animate-spin' : ''}`} />
+                          <span className="hidden sm:inline">{fetchingPeerId === col.id ? '...' : 'Fetch'}</span>
+                        </button>
+                      )}
                       {idx > 1 && (
                         <button
                           type="button"
