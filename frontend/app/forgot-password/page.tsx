@@ -41,7 +41,6 @@ export default function ForgotPasswordPage() {
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
-  const [demoOtp, setDemoOtp] = useState<string | null>(null);
 
   // Resend Timer
   const [resendCooldown, setResendCooldown] = useState(0);
@@ -71,9 +70,6 @@ export default function ForgotPasswordPage() {
       const res = await api.post('/auth/forgot-password/send-otp', { email });
       if (res.data?.success) {
         setSuccessMsg(res.data.message || 'OTP verification code sent to your email.');
-        if (res.data.demo_otp) {
-          setDemoOtp(res.data.demo_otp);
-        }
         setResendCooldown(60);
         setStep(2);
       } else {
@@ -263,24 +259,7 @@ export default function ForgotPasswordPage() {
               </div>
             )}
 
-            {/* Demo OTP Helper Pill */}
-            {demoOtp && step === 2 && (
-              <div className="mb-5 p-3 bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 text-amber-800 dark:text-amber-200 rounded-2xl text-xs flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <Sparkles className="w-4 h-4 text-amber-500 shrink-0" />
-                  <span>
-                    OTP Code: <strong className="font-mono text-sm tracking-widest bg-white dark:bg-amber-900/60 px-2 py-0.5 rounded-lg border border-amber-300 dark:border-amber-700">{demoOtp}</strong>
-                  </span>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setOtp(demoOtp)}
-                  className="px-2.5 py-1 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-lg text-[10px] cursor-pointer transition shadow-xs"
-                >
-                  Auto Fill
-                </button>
-              </div>
-            )}
+
 
             {/* ─── STEP 1: ENTER REGISTERED EMAIL ─── */}
             {step === 1 && (

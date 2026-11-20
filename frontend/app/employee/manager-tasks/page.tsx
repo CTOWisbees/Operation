@@ -4,7 +4,8 @@ import React, { useState, useEffect } from 'react';
 import {
   CheckSquare, Plus, Search, Filter, Calendar, Clock,
   AlertCircle, CheckCircle2, User, Users, Building2, Flag,
-  Trash2, X, Send, RefreshCw, Zap, Shield, Sparkles, Globe
+  Trash2, X, Send, RefreshCw, Zap, Shield, Sparkles, Globe,
+  AlertTriangle, Check, ThumbsUp, ThumbsDown, Star
 } from 'lucide-react';
 import { api } from '@/lib/api';
 
@@ -32,6 +33,21 @@ export default function ManagerTasksPage() {
     priority: 'High',
     due_date: new Date(Date.now() + 86400000 * 2).toISOString().split('T')[0],
   });
+
+  // Extend Deadline Modal state
+  const [showExtendModal, setShowExtendModal] = useState(false);
+  const [extendTaskId, setExtendTaskId] = useState<number | null>(null);
+  const [extendTaskTitle, setExtendTaskTitle] = useState('');
+  const [extendedDeadline, setExtendedDeadline] = useState('');
+  const [extendNotes, setExtendNotes] = useState('');
+  const [extending, setExtending] = useState(false);
+
+  // Review Delay Modal state
+  const [showRejectDelayModal, setShowRejectDelayModal] = useState(false);
+  const [reviewTaskId, setReviewTaskId] = useState<number | null>(null);
+  const [penaltyPoints, setPenaltyPoints] = useState(10);
+  const [rejectNotes, setRejectNotes] = useState('');
+  const [reviewing, setReviewing] = useState(false);
 
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
@@ -73,7 +89,6 @@ export default function ManagerTasksPage() {
         setTasks(tasksRes.data.tasks);
       }
 
-      // Collect team members from both endpoints and deduplicate
       const allEmps = [
         ...(tasksRes.data?.team_members || []),
         ...(empRes.data?.employees || [])
@@ -163,11 +178,10 @@ export default function ManagerTasksPage() {
         }
         payload.assigned_to_ids = selectedAssigneeIds;
       }
-      // 'department' mode will broadcast
 
       const res = await api.post('/tracker/assigned-tasks/create', payload);
       if (res.data?.success) {
-        showFeedback(res.data.message || 'Task assigned successfully!');
+        showFeedback(res.data.message || 'Task assigned successfully and reflected to team member(s)!');
         setShowCreateModal(false);
         fetchData();
       } else {
@@ -181,6 +195,110 @@ export default function ManagerTasksPage() {
     }
   };
 
+  // Delete Task
+  const handleDeleteTask = async (taskId: number, title: string) => {
+    if (!confirm(`Are you sure you want to delete task "${title}"?`)) return;
+    try {
+      const res = await api.delete(`/tasks/${taskId}/delete`);
+      if (res.data?.success) {
+        showFeedback(`Task "${title}" deleted successfully.`);
+        fetchData();
+      } else {
+        showFeedback(res.data?.error || 'Failed to delete task.', 'error');
+      }
+    } catch (err: any) {
+      showFeedback(err.response?.data?.error || 'Failed to delete task.', 'error');
+    }
+  };
+
+  // Open Extend Deadline Modal
+  const openExtendDeadlineModal = (task: any) => {
+    setExtendTaskId(task.id);
+    setExtendTaskTitle(task.title);
+    setExtendedDeadline(task.extended_deadline || task.due_date || new Date(Date.now() + 86400000 * 3).toISOString().split('T')[0]);
+    setExtendNotes('');
+    setShowExtendModal(true);
+  };
+
+  // Submit Extend Deadline
+  const handleExtendDeadline = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!extendTaskId || !extendedDeadline) return;
+
+    try {
+      setExtending(true);
+      const res = await api.post(`/tasks/${extendTaskId}/extend-deadline`, {
+        extended_deadline: extendedDeadline,
+        notes: extendNotes,
+      });
+
+      if (res.data?.success) {
+        showFeedback(res.data.message || 'Deadline extended successfully (Final Deadline)!');
+        setShowExtendModal(false);
+        fetchData();
+      } else {
+        showFeedback(res.data?.error || 'Failed to extend deadline.', 'error');
+      }
+    } catch (err: any) {
+      showFeedback(err.response?.data?.error || 'Failed to extend deadline.', 'error');
+    } finally {
+      setExtending(false);
+    }
+  };
+
+  // Accept Delay Explanation
+  const handleAcceptDelay = async (taskId: number, taskTitle: string) => {
+    try {
+      const res = await api.post(`/tasks/${taskId}/review-delay`, {
+        action: 'accept',
+        notes: 'Delay explanation accepted by manager.',
+      });
+      if (res.data?.success) {
+        showFeedback(`Delay explanation for "${taskTitle}" ACCEPTED. No points deducted.`);
+        fetchData();
+      } else {
+        showFeedback(res.data?.error || 'Failed to accept delay.', 'error');
+      }
+    } catch (err: any) {
+      showFeedback(err.response?.data?.error || 'Failed to accept delay.', 'error');
+    }
+  };
+
+  // Open Reject Delay Modal
+  const openRejectDelayModal = (taskId: number) => {
+    setReviewTaskId(taskId);
+    setPenaltyPoints(10);
+    setRejectNotes('');
+    setShowRejectDelayModal(true);
+  };
+
+  // Submit Reject Delay (Points Deduction)
+  const handleRejectDelay = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!reviewTaskId) return;
+
+    try {
+      setReviewing(true);
+      const res = await api.post(`/tasks/${reviewTaskId}/review-delay`, {
+        action: 'reject',
+        penalty_points: Number(penaltyPoints) || 10,
+        notes: rejectNotes || 'Delay explanation rejected by manager due to unjustified delay.',
+      });
+
+      if (res.data?.success) {
+        showFeedback(res.data.message || 'Delay explanation rejected. Points deducted!');
+        setShowRejectDelayModal(false);
+        fetchData();
+      } else {
+        showFeedback(res.data?.error || 'Failed to reject delay.', 'error');
+      }
+    } catch (err: any) {
+      showFeedback(err.response?.data?.error || 'Failed to reject delay.', 'error');
+    } finally {
+      setReviewing(false);
+    }
+  };
+
   const handleUpdateStatus = async (taskId: number, newStatus: string) => {
     try {
       const res = await api.post(`/tracker/assigned-tasks/${taskId}/status`, {
@@ -191,7 +309,6 @@ export default function ManagerTasksPage() {
         fetchData();
       }
     } catch (err: any) {
-      console.error(err);
       showFeedback('Failed to update task status.', 'error');
     }
   };
@@ -233,7 +350,7 @@ export default function ManagerTasksPage() {
               </span>
             </div>
             <p className="text-xs sm:text-sm text-[var(--text-muted)] mt-0.5">
-              Assign deliverables, set task priorities, and track department execution
+              Assign deliverables, extend deadlines, review late explanations, and manage employee performance points
             </p>
           </div>
         </div>
@@ -334,7 +451,7 @@ export default function ManagerTasksPage() {
       </div>
 
       {/* Task List */}
-      <div className="space-y-3">
+      <div className="space-y-4">
         {loading ? (
           <div className="p-12 text-center bg-[var(--card-bg)] border border-[var(--card-border)] rounded-2xl">
             <div className="w-8 h-8 border-3 border-purple-600 border-t-transparent rounded-full animate-spin mx-auto mb-3" />
@@ -352,82 +469,318 @@ export default function ManagerTasksPage() {
           filteredTasks.map((t) => (
             <div
               key={t.id}
-              className="p-5 bg-[var(--card-bg)] border border-[var(--card-border)] rounded-2xl shadow-xs hover:border-purple-500/30 transition flex flex-col md:flex-row items-start md:items-center justify-between gap-4"
+              className="p-5 bg-[var(--card-bg)] border border-[var(--card-border)] rounded-2xl shadow-xs hover:border-purple-500/30 transition flex flex-col space-y-3"
             >
-              <div className="space-y-1.5 min-w-0 flex-1">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className="px-2 py-0.5 rounded-md text-[10px] font-extrabold bg-purple-500/10 text-purple-600 dark:text-purple-400 uppercase tracking-wider">
-                    {t.department}
-                  </span>
-                  <span className={`px-2 py-0.5 rounded-md text-[10px] font-extrabold uppercase tracking-wider ${
-                    t.priority === 'Urgent' ? 'bg-rose-500/10 text-rose-600' :
-                    t.priority === 'High' ? 'bg-amber-500/10 text-amber-600' :
-                    'bg-slate-500/10 text-slate-600 dark:text-slate-400'
-                  }`}>
-                    {t.priority} Priority
-                  </span>
-                  <span className="px-2 py-0.5 rounded-md text-[10px] font-extrabold bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 uppercase tracking-wider">
-                    {t.task_type}
-                  </span>
-                  {t.is_flagged && (
-                    <span className="px-2 py-0.5 rounded-md text-[10px] font-extrabold bg-rose-500/10 text-rose-600 flex items-center gap-1">
-                      <Flag className="w-3 h-3 fill-rose-600" /> Flagged
+              <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-3">
+                <div className="space-y-1.5 min-w-0 flex-1">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="px-2 py-0.5 rounded-md text-[10px] font-extrabold bg-purple-500/10 text-purple-600 dark:text-purple-400 uppercase tracking-wider">
+                      {t.department}
                     </span>
-                  )}
-                </div>
+                    <span className={`px-2 py-0.5 rounded-md text-[10px] font-extrabold uppercase tracking-wider ${
+                      t.priority === 'Urgent' ? 'bg-rose-500/10 text-rose-600' :
+                      t.priority === 'High' ? 'bg-amber-500/10 text-amber-600' :
+                      'bg-slate-500/10 text-slate-600 dark:text-slate-400'
+                    }`}>
+                      {t.priority} Priority
+                    </span>
+                    <span className="px-2 py-0.5 rounded-md text-[10px] font-extrabold bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 uppercase tracking-wider">
+                      {t.task_type}
+                    </span>
 
-                <h3 className="text-sm font-black text-[var(--text-primary)]">
-                  {t.title}
-                </h3>
-                {t.description && (
-                  <p className="text-xs text-[var(--text-secondary)] line-clamp-2">
-                    {t.description}
-                  </p>
-                )}
-
-                <div className="flex items-center gap-4 text-[11px] text-[var(--text-muted)] pt-1 flex-wrap">
-                  <span className="flex items-center gap-1 font-medium">
-                    <User className="w-3.5 h-3.5 text-purple-500" />
-                    {t.assigned_to ? (
-                      <span className="font-bold text-[var(--text-primary)]">{t.assigned_to.name} ({t.assigned_to.designation || 'Team Member'})</span>
-                    ) : (
-                      <span className="italic text-amber-500">Unassigned (Broadcast to {t.department})</span>
+                    {/* Extended Deadline (Final Deadline) Pill */}
+                    {t.is_deadline_extended && (
+                      <span className="px-2.5 py-0.5 rounded-md text-[10px] font-black bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/30 flex items-center gap-1 animate-pulse">
+                        <Clock className="w-3 h-3 text-amber-500" />
+                        Extended Deadline (Final Deadline): {t.extended_deadline}
+                      </span>
                     )}
-                  </span>
-                  {t.due_date && (
-                    <span className="flex items-center gap-1">
-                      <Calendar className="w-3.5 h-3.5 text-slate-400" /> Due: {t.due_date}
-                    </span>
+
+                    {/* Delay Decision Badges */}
+                    {t.delay_status === 'Accepted' && (
+                      <span className="px-2 py-0.5 rounded-md text-[10px] font-extrabold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 flex items-center gap-1">
+                        <Check className="w-3 h-3" /> Delay Accepted (No Penalty)
+                      </span>
+                    )}
+                    {t.delay_status === 'Rejected' && (
+                      <span className="px-2 py-0.5 rounded-md text-[10px] font-extrabold bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/20 flex items-center gap-1">
+                        <X className="w-3 h-3" /> Delay Rejected (-{t.points_deducted || 10} Pts)
+                      </span>
+                    )}
+
+                    {t.is_flagged && (
+                      <span className="px-2 py-0.5 rounded-md text-[10px] font-extrabold bg-rose-500/10 text-rose-600 flex items-center gap-1">
+                        <Flag className="w-3 h-3 fill-rose-600" /> Flagged
+                      </span>
+                    )}
+                  </div>
+
+                  <h3 className="text-sm font-black text-[var(--text-primary)]">
+                    {t.title}
+                  </h3>
+                  {t.description && (
+                    <p className="text-xs text-[var(--text-secondary)] line-clamp-2">
+                      {t.description}
+                    </p>
                   )}
-                  <span className="text-[10px] text-slate-400">Created: {t.created_at}</span>
+
+                  <div className="flex items-center gap-4 text-[11px] text-[var(--text-muted)] pt-1 flex-wrap">
+                    <span className="flex items-center gap-1 font-medium">
+                      <User className="w-3.5 h-3.5 text-purple-500" />
+                      {t.assigned_to ? (
+                        <span className="font-bold text-[var(--text-primary)]">
+                          {t.assigned_to.name} ({t.assigned_to.designation || 'Team Member'})
+                          {t.assigned_to.points !== undefined && (
+                            <span className="ml-1.5 px-1.5 py-0.2 rounded text-[10px] bg-amber-500/15 text-amber-600 dark:text-amber-400 font-bold inline-flex items-center gap-0.5">
+                              <Star className="w-2.5 h-2.5 fill-amber-500 text-amber-500" /> {t.assigned_to.points} pts
+                            </span>
+                          )}
+                        </span>
+                      ) : (
+                        <span className="italic text-amber-500">Unassigned (Broadcast to {t.department})</span>
+                      )}
+                    </span>
+
+                    {/* Deadline Display */}
+                    <span className="flex items-center gap-1">
+                      <Calendar className="w-3.5 h-3.5 text-slate-400" />
+                      {t.is_deadline_extended ? (
+                        <span className="font-bold text-amber-600 dark:text-amber-400">
+                          Final Deadline: {t.extended_deadline}
+                        </span>
+                      ) : (
+                        <span>Due: {t.due_date || 'Flexible'}</span>
+                      )}
+                    </span>
+
+                    <span className="text-[10px] text-slate-400">Created: {t.created_at}</span>
+                  </div>
+                </div>
+
+                {/* Status and Action Buttons */}
+                <div className="flex items-center gap-2 shrink-0">
+                  <select
+                    value={t.status}
+                    onChange={(e) => handleUpdateStatus(t.id, e.target.value)}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-black uppercase tracking-wider border cursor-pointer ${
+                      t.status === 'Completed'
+                        ? 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20'
+                        : t.status === 'In Progress'
+                        ? 'bg-sky-500/10 text-sky-600 border-sky-500/20'
+                        : 'bg-amber-500/10 text-amber-600 border-amber-500/20'
+                    }`}
+                  >
+                    <option value="Todo">Todo</option>
+                    <option value="In Progress">In Progress</option>
+                    <option value="Completed">Completed</option>
+                  </select>
+
+                  {/* Extend Deadline Button */}
+                  <button
+                    type="button"
+                    onClick={() => openExtendDeadlineModal(t)}
+                    title="Extend Deadline for Team Member"
+                    className="p-2 rounded-xl border border-[var(--card-border)] hover:bg-amber-500/10 text-amber-600 hover:text-amber-700 transition cursor-pointer text-xs font-bold flex items-center gap-1"
+                  >
+                    <Clock className="w-3.5 h-3.5" />
+                    <span className="hidden sm:inline">Extend</span>
+                  </button>
+
+                  {/* Delete Task Button */}
+                  <button
+                    type="button"
+                    onClick={() => handleDeleteTask(t.id, t.title)}
+                    title="Delete Task"
+                    className="p-2 rounded-xl border border-[var(--card-border)] hover:bg-rose-500/10 text-rose-500 hover:text-rose-600 transition cursor-pointer"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
                 </div>
               </div>
 
-              {/* Status and Action Buttons */}
-              <div className="flex items-center gap-2 shrink-0">
-                <select
-                  value={t.status}
-                  onChange={(e) => handleUpdateStatus(t.id, e.target.value)}
-                  className={`px-3 py-1.5 rounded-xl text-xs font-black uppercase tracking-wider border cursor-pointer ${
-                    t.status === 'Completed'
-                      ? 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20'
-                      : t.status === 'In Progress'
-                      ? 'bg-sky-500/10 text-sky-600 border-sky-500/20'
-                      : 'bg-amber-500/10 text-amber-600 border-amber-500/20'
-                  }`}
-                >
-                  <option value="Todo">Todo</option>
-                  <option value="In Progress">In Progress</option>
-                  <option value="Completed">Completed</option>
-                </select>
-              </div>
+              {/* Delay Explanation Review Banner (Accept / Reject) */}
+              {t.delay_reason && t.delay_status === 'Pending' && (
+                <div className="p-3.5 bg-amber-50/70 dark:bg-amber-950/30 rounded-xl border border-amber-300 dark:border-amber-800/80 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 animate-fadeIn">
+                  <div className="space-y-1">
+                    <div className="flex items-center gap-1.5 text-xs font-black text-amber-800 dark:text-amber-300">
+                      <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                      <span>Delay Explanation from {t.assigned_to?.name || 'Assignee'}:</span>
+                    </div>
+                    <p className="text-xs text-amber-900/90 dark:text-amber-200/90 italic pl-5">
+                      "{t.delay_reason}"
+                    </p>
+                  </div>
+
+                  <div className="flex items-center gap-2 self-end sm:self-center shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => handleAcceptDelay(t.id, t.title)}
+                      className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition flex items-center gap-1 shadow-2xs cursor-pointer"
+                    >
+                      <ThumbsUp className="w-3.5 h-3.5" />
+                      <span>Accept Delay (OK)</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => openRejectDelayModal(t.id)}
+                      className="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-bold transition flex items-center gap-1 shadow-2xs cursor-pointer"
+                    >
+                      <ThumbsDown className="w-3.5 h-3.5" />
+                      <span>Reject & Deduct Points</span>
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           ))
         )}
       </div>
 
-      {/* Create Task Modal */}
-      {/* Create Task Modal */}
+      {/* ── Extend Deadline Modal ── */}
+      {showExtendModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+          <div className="bg-[var(--card-bg)] border border-[var(--card-border)] rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-4 animate-scaleUp">
+            <div className="flex items-center justify-between border-b border-[var(--card-border)] pb-3">
+              <div className="flex items-center gap-2">
+                <Clock className="w-5 h-5 text-amber-500" />
+                <h3 className="text-base font-black text-[var(--text-primary)]">Extend Task Deadline</h3>
+              </div>
+              <button onClick={() => setShowExtendModal(false)} className="p-1 hover:bg-[var(--hover-bg)] rounded-xl cursor-pointer">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <p className="text-xs text-[var(--text-muted)]">
+              Extend deadline for <strong className="text-[var(--text-primary)]">{extendTaskTitle}</strong>. This will be marked as <strong className="text-amber-600">Extended Deadline (Final Deadline)</strong>.
+            </p>
+
+            <form onSubmit={handleExtendDeadline} className="space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-[var(--text-primary)] mb-1">
+                  New Extended Deadline (Final Deadline) *
+                </label>
+                <input
+                  type="date"
+                  required
+                  value={extendedDeadline}
+                  onChange={(e) => setExtendedDeadline(e.target.value)}
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-[var(--card-border)] bg-[var(--sidebar-bg)] text-xs font-bold text-[var(--text-primary)] focus:outline-none focus:ring-2 focus:ring-amber-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-[var(--text-primary)] mb-1">
+                  Reason / Extension Note (Optional)
+                </label>
+                <textarea
+                  rows={2}
+                  placeholder="e.g. Scope revised, dependency resolved, final deadline set."
+                  value={extendNotes}
+                  onChange={(e) => setExtendNotes(e.target.value)}
+                  className="w-full px-3.5 py-2 rounded-xl border border-[var(--card-border)] bg-[var(--sidebar-bg)] text-xs font-medium text-[var(--text-primary)] focus:outline-none resize-none"
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-[var(--card-border)]">
+                <button
+                  type="button"
+                  onClick={() => setShowExtendModal(false)}
+                  className="px-4 py-2 text-xs font-bold text-[var(--text-secondary)] hover:bg-[var(--hover-bg)] rounded-xl cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={extending}
+                  className="px-5 py-2.5 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-black transition flex items-center gap-1.5 shadow-xs cursor-pointer"
+                >
+                  {extending ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Clock className="w-4 h-4" />}
+                  <span>Save Extended Deadline</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ── Reject Delay Modal (Points Deduction) ── */}
+      {showRejectDelayModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+          <div className="bg-[var(--card-bg)] border border-[var(--card-border)] rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-4 animate-scaleUp">
+            <div className="flex items-center justify-between border-b border-[var(--card-border)] pb-3">
+              <div className="flex items-center gap-2">
+                <AlertTriangle className="w-5 h-5 text-rose-500" />
+                <h3 className="text-base font-black text-[var(--text-primary)]">Reject Delay & Deduct Points</h3>
+              </div>
+              <button onClick={() => setShowRejectDelayModal(false)} className="p-1 hover:bg-[var(--hover-bg)] rounded-xl cursor-pointer">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <p className="text-xs text-[var(--text-muted)]">
+              Rejecting this delay explanation will result in an immediate penalty point deduction for the assigned employee(s).
+            </p>
+
+            <form onSubmit={handleRejectDelay} className="space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-[var(--text-primary)] mb-1">
+                  Penalty Points to Deduct
+                </label>
+                <div className="flex items-center gap-3">
+                  {[5, 10, 15, 20].map((pts) => (
+                    <button
+                      key={pts}
+                      type="button"
+                      onClick={() => setPenaltyPoints(pts)}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-black transition cursor-pointer border ${
+                        penaltyPoints === pts
+                          ? 'bg-rose-600 text-white border-rose-600 shadow-xs'
+                          : 'bg-[var(--sidebar-bg)] border-[var(--card-border)] text-[var(--text-primary)]'
+                      }`}
+                    >
+                      -{pts} Pts
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-[var(--text-primary)] mb-1">
+                  Rejection Reason / Manager Feedback
+                </label>
+                <textarea
+                  rows={2}
+                  required
+                  placeholder="e.g. Unjustified delay without prior communication..."
+                  value={rejectNotes}
+                  onChange={(e) => setRejectNotes(e.target.value)}
+                  className="w-full px-3.5 py-2 rounded-xl border border-[var(--card-border)] bg-[var(--sidebar-bg)] text-xs font-medium text-[var(--text-primary)] focus:outline-none resize-none"
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-[var(--card-border)]">
+                <button
+                  type="button"
+                  onClick={() => setShowRejectDelayModal(false)}
+                  className="px-4 py-2 text-xs font-bold text-[var(--text-secondary)] hover:bg-[var(--hover-bg)] rounded-xl cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={reviewing}
+                  className="px-5 py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-black transition flex items-center gap-1.5 shadow-xs cursor-pointer"
+                >
+                  {reviewing ? <RefreshCw className="w-4 h-4 animate-spin" /> : <ThumbsDown className="w-4 h-4" />}
+                  <span>Confirm Rejection (-{penaltyPoints} Pts)</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ── Create Task Modal ── */}
       {showCreateModal && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-xs z-50 flex items-center justify-center p-4">
           <div className="bg-[var(--card-bg)] border border-[var(--card-border)] rounded-3xl max-w-xl w-full p-6 shadow-2xl space-y-5 animate-scaleUp max-h-[90vh] overflow-y-auto">
@@ -438,7 +791,7 @@ export default function ManagerTasksPage() {
                 </div>
                 <div>
                   <h3 className="text-base font-black text-[var(--text-primary)]">Assign Department Task</h3>
-                  <p className="text-xs text-[var(--text-muted)]">Assign specific deliverables to single or multiple department team members</p>
+                  <p className="text-xs text-[var(--text-muted)]">Assign deliverables to individuals, groups, or entire departments</p>
                 </div>
               </div>
               <button
@@ -640,7 +993,7 @@ export default function ManagerTasksPage() {
                     return (
                       <div className="p-3 bg-purple-100 dark:bg-purple-950/60 rounded-xl text-purple-900 dark:text-purple-200 text-xs font-semibold flex items-center gap-2.5 border border-purple-200 dark:border-purple-800">
                         <Building2 className="w-5 h-5 shrink-0 text-purple-600" />
-                        <span>This task will be automatically broadcast to all active members of the <strong>{newTask.department}</strong> department.</span>
+                        <span>This task will be automatically broadcast and reflected to all active members of the <strong>{newTask.department}</strong> department.</span>
                       </div>
                     );
                   }

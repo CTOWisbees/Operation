@@ -13,7 +13,7 @@ export default function RootPage() {
     if (token && userRaw) {
       try {
         const u = JSON.parse(userRaw);
-        if (u.role === 'admin') {
+        if (u.role === 'admin' || u.is_superadmin) {
           router.push('/admin/dashboard');
           return;
         } else {

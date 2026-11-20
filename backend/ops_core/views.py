@@ -36,6 +36,8 @@ from .models import (
     DailyTrackerAuditLog,
     StockRecommendation,
     EquityResearchReport,
+    Notification,
+    PointTransaction,
 )
 
 
@@ -227,6 +229,7 @@ def serialize_user(user):
         'email': user.email,
         'role': user.role,
         'is_superadmin': is_super,
+        'is_admin': is_super,
         'is_manager': is_mgr,
         'managed_department': user.managed_department or (managed_depts[0] if managed_depts else ''),
         'managed_departments': managed_depts,
@@ -243,6 +246,7 @@ def serialize_user(user):
         'joining_date': user.joining_date.strftime('%Y-%m-%d') if user.joining_date else '',
         'avatar_url': user.avatar_url,
         'skills': user.skills,
+        'points': getattr(user, 'points', 100),
         'assigned_role': {
             'id': primary_role.id,
             'title': primary_role.title,
@@ -264,13 +268,28 @@ def serialize_user(user):
 
 
 def serialize_task(task):
+    effective_deadline = task.extended_deadline or task.deadline
+    is_overdue = bool(effective_deadline and timezone.now().date() > effective_deadline and task.status != 'Completed')
     return {
         'id': task.id,
         'title': task.title,
         'description': task.description,
+        'department': task.department or (task.assigned_to.department if task.assigned_to else ''),
+        'assigned_mode': getattr(task, 'assigned_mode', 'single'),
         'priority': task.priority,
         'status': task.status,
         'deadline': task.deadline.strftime('%Y-%m-%d') if task.deadline else '',
+        'extended_deadline': task.extended_deadline.strftime('%Y-%m-%d') if getattr(task, 'extended_deadline', None) else '',
+        'is_deadline_extended': bool(getattr(task, 'is_deadline_extended', False)),
+        'effective_deadline': effective_deadline.strftime('%Y-%m-%d') if effective_deadline else '',
+        'is_overdue': is_overdue,
+        'delay_reason': getattr(task, 'delay_reason', '') or '',
+        'delay_status': getattr(task, 'delay_status', 'None') or 'None',
+        'delay_reviewed_by': task.delay_reviewed_by.name if getattr(task, 'delay_reviewed_by', None) else '',
+        'delay_reviewed_at': task.delay_reviewed_at.strftime('%Y-%m-%d %H:%M') if getattr(task, 'delay_reviewed_at', None) else None,
+        'delay_review_notes': getattr(task, 'delay_review_notes', '') or '',
+        'points_awarded': getattr(task, 'points_awarded', 0) or 0,
+        'points_deducted': getattr(task, 'points_deducted', 0) or 0,
         'estimated_hours': task.estimated_hours,
         'tags': [t.strip() for t in task.tags.split(',') if t.strip()] if task.tags else [],
         'attachment_url': task.attachment_url,
@@ -285,10 +304,12 @@ def serialize_task(task):
             'designation': task.assigned_to.designation,
             'department': task.assigned_to.department,
             'emp_code': task.assigned_to.emp_code,
+            'points': getattr(task.assigned_to, 'points', 100),
         } if task.assigned_to else None,
         'created_by': {
             'id': task.created_by.id,
             'name': task.created_by.name,
+            'email': task.created_by.email,
         } if task.created_by else None,
     }
 
@@ -512,10 +533,10 @@ WisBees Operations Team
     </html>
     """
 
-    smtp_server = getattr(settings, 'EMAIL_HOST', 'smtp.gmail.com')
-    smtp_port = getattr(settings, 'EMAIL_PORT', 587)
-    smtp_user = getattr(settings, 'EMAIL_HOST_USER', '')
-    smtp_password = getattr(settings, 'EMAIL_HOST_PASSWORD', '')
+    smtp_server = os.environ.get('SMTP_HOST') or getattr(settings, 'EMAIL_HOST', 'smtp.gmail.com')
+    smtp_port = int(os.environ.get('SMTP_PORT') or getattr(settings, 'EMAIL_PORT', 587))
+    smtp_user = os.environ.get('SMTP_USER') or getattr(settings, 'EMAIL_HOST_USER', '')
+    smtp_password = os.environ.get('SMTP_PASS') or getattr(settings, 'EMAIL_HOST_PASSWORD', '')
 
     sent = False
     if smtp_user and smtp_password:
@@ -536,11 +557,106 @@ WisBees Operations Team
         except Exception as e:
             print(f"[OTP Email SMTP Error]: {e}")
 
-    print(f"\n==========================================")
-    print(f"[PASSWORD RESET OTP] Target: {email}")
-    print(f"[OTP Code]: {otp_code}")
-    print(f"==========================================\n")
     return sent
+
+
+def send_task_notification_email(recipient_email, subject, body_text, html_content=None):
+    """
+    Sends task-related notification email via SMTP (e.g. task submissions, delay updates).
+    """
+    smtp_server = os.environ.get('SMTP_HOST') or getattr(settings, 'EMAIL_HOST', 'smtp.gmail.com')
+    smtp_port = int(os.environ.get('SMTP_PORT') or getattr(settings, 'EMAIL_PORT', 587))
+    smtp_user = os.environ.get('SMTP_USER') or getattr(settings, 'EMAIL_HOST_USER', '')
+    smtp_password = os.environ.get('SMTP_PASS') or getattr(settings, 'EMAIL_HOST_PASSWORD', '')
+
+    if not smtp_user or not smtp_password or not recipient_email:
+        print(f"[Email Notification Skipped - SMTP Not Configured or No Recipient]: To {recipient_email}")
+        return False
+
+    try:
+        msg = MIMEMultipart('alternative')
+        sender_name = os.environ.get('SENDER_NAME', 'WisBees Operations')
+        msg['From'] = f"{sender_name} <{smtp_user}>"
+        msg['To'] = recipient_email
+        msg['Subject'] = subject
+        msg.attach(MIMEText(body_text, 'plain'))
+        if html_content:
+            msg.attach(MIMEText(html_content, 'html'))
+
+        with smtplib.SMTP(smtp_server, smtp_port, timeout=12) as server:
+            server.ehlo()
+            server.starttls()
+            server.login(smtp_user, smtp_password)
+            server.sendmail(smtp_user, [recipient_email], msg.as_string())
+        print(f"[Task Notification Email Sent] To: {recipient_email} - Subject: {subject}")
+        return True
+    except Exception as e:
+        print(f"[Task Notification Email Failed] To: {recipient_email} - Error: {e}")
+        return False
+
+
+def create_inapp_notification(recipient, sender, title, message, notification_type='general', task_id=None, link=''):
+    """
+    Creates an in-app Notification for the specified user.
+    """
+    if not recipient:
+        return None
+    try:
+        return Notification.objects.create(
+            recipient=recipient,
+            sender=sender,
+            title=title,
+            message=message,
+            notification_type=notification_type,
+            task_id=task_id,
+            link=link or '',
+        )
+    except Exception as e:
+        print(f"[Create Notification Error]: {e}")
+        return None
+
+
+def award_or_deduct_points(user, points_delta, reason, task=None, awarded_by=None):
+    """
+    Adjusts user's point total and logs a PointTransaction and Notification.
+    points_delta: can be positive (reward) or negative (penalty).
+    """
+    if not user:
+        return 0
+    try:
+        current_pts = getattr(user, 'points', 100) or 100
+        new_pts = max(0, current_pts + points_delta)
+        user.points = new_pts
+        user.save(update_fields=['points'])
+
+        PointTransaction.objects.create(
+            user=user,
+            points=points_delta,
+            reason=reason,
+            task=task,
+            created_by=awarded_by,
+        )
+
+        # Notify user of point change
+        if points_delta > 0:
+            notif_title = f"⭐ +{points_delta} Points Earned!"
+            notif_msg = f"You were awarded {points_delta} points: {reason}. Current score: {new_pts} pts."
+        else:
+            notif_title = f"⚠️ {points_delta} Points Deducted"
+            notif_msg = f"{abs(points_delta)} points were deducted: {reason}. Current score: {new_pts} pts."
+
+        create_inapp_notification(
+            recipient=user,
+            sender=awarded_by,
+            title=notif_title,
+            message=notif_msg,
+            notification_type='point_update',
+            task_id=task.id if task else None,
+        )
+        return new_pts
+    except Exception as e:
+        print(f"[Points System Error]: {e}")
+        return getattr(user, 'points', 100)
 
 
 @csrf_exempt
@@ -583,10 +699,9 @@ def api_forgot_password_send_otp(request):
 
     return JsonResponse({
         'success': True,
-        'message': f'A 6-digit verification OTP code has been generated and sent to {user.email}.',
+        'message': f'A 6-digit verification code has been sent directly to {user.email}. Please check your inbox.',
         'email': user.email,
         'user_name': user.name,
-        'demo_otp': otp_code  # Provided for immediate testing/demo convenience
     })
 
 
@@ -907,7 +1022,7 @@ def api_admin_employees(request):
         data = parse_request_json(request)
         email = data.get('email', '').strip().lower()
         full_name = data.get('full_name', '').strip() or data.get('name', '').strip()
-        raw_pwd = data.get('password', 'employee123')
+        raw_pwd = data.get('password') or 'Wisbees@2026'
         is_active = bool(data.get('is_active', True))
 
         if not email or not full_name:
@@ -942,14 +1057,18 @@ def api_admin_employees(request):
         if not primary_dept and assigned_departments:
             primary_dept = assigned_departments[0]
 
+        role_val = data.get('role', 'employee')
+        is_admin_choice = bool(data.get('is_admin') or data.get('is_superadmin') or role_val == 'admin')
+
         new_emp = OperationUser(
             name=full_name,
             full_name=full_name,
             email=email,
-            role='employee',
+            role='admin' if is_admin_choice else 'employee',
+            is_superadmin=is_admin_choice,
             phone=data.get('phone', ''),
             emp_code=data.get('emp_code', f"OPS-{OperationUser.objects.count()+1:04d}"),
-            designation=data.get('designation', 'Operations Associate'),
+            designation=data.get('designation', 'Operations Administrator' if is_admin_choice else 'Operations Associate'),
             department=primary_dept or 'Operations',
             assigned_role=primary_role,
             assigned_departments=assigned_departments,
@@ -1055,6 +1174,15 @@ def api_admin_employee_detail(request, pk):
             else:
                 target_emp.assigned_roles.clear()
 
+        if 'role' in data or 'is_superadmin' in data or 'is_admin' in data:
+            make_admin = bool(
+                data.get('role') == 'admin' or
+                data.get('is_superadmin') or
+                data.get('is_admin')
+            )
+            target_emp.role = 'admin' if make_admin else 'employee'
+            target_emp.is_superadmin = make_admin
+
         if data.get('new_password') or data.get('password'):
             target_emp.set_password(data.get('new_password') or data.get('password'))
 
@@ -1073,6 +1201,83 @@ def api_admin_employee_detail(request, pk):
         invalidate_ops_cache(emp_id)
         ActivityLog.objects.create(user=admin_user, action=f"Deleted employee account: {name}")
         return JsonResponse({'success': True, 'message': f'Employee {name} deleted successfully'})
+
+
+@csrf_exempt
+@require_POST
+def api_admin_toggle_admin_role(request, pk):
+    """
+    Superadmin assigns or revokes full Admin access for any OP User / Employee.
+    When assigned as admin:
+    - role = 'admin'
+    - is_superadmin = True
+    - Full admin access to dashboard, managers, departments, employees, and tasks.
+    - Notification sent to user in-app and via email.
+    """
+    admin_user = get_current_user(request)
+    if not admin_user or not (admin_user.role == 'admin' or admin_user.is_superadmin):
+        return JsonResponse({'success': False, 'error': 'Admin privileges required to assign admin access.'}, status=403)
+
+    target_emp = get_object_or_404(OperationUser, id=pk)
+
+    data = parse_request_json(request)
+    make_admin = data.get('make_admin')
+    is_currently_admin = bool(target_emp.role == 'admin' or target_emp.is_superadmin)
+
+    if make_admin is None:
+        make_admin = not is_currently_admin
+    else:
+        make_admin = bool(make_admin)
+
+    # Don't allow demoting self if no other superadmin exists
+    if not make_admin and target_emp.id == admin_user.id:
+        other_admins = OperationUser.objects.filter(is_active=True).filter(
+            Q(role='admin') | Q(is_superadmin=True)
+        ).exclude(id=admin_user.id).count()
+        if other_admins == 0:
+            return JsonResponse({'success': False, 'error': 'Cannot revoke admin access from the sole remaining Superadmin.'}, status=400)
+
+    if make_admin:
+        target_emp.role = 'admin'
+        target_emp.is_superadmin = True
+        if not target_emp.designation or 'associate' in target_emp.designation.lower() or 'specialist' in target_emp.designation.lower():
+            target_emp.designation = 'Operations Administrator'
+        action_msg = f"Assigned full Admin access to {target_emp.name}."
+        notif_title = "👑 Admin Access Granted"
+        notif_msg = f"Administrator {admin_user.name} has granted you full Admin privileges. You now have full access to the Operations Command Hub."
+    else:
+        target_emp.role = 'employee'
+        target_emp.is_superadmin = False
+        action_msg = f"Revoked Admin access from {target_emp.name}. Reverted to standard employee role."
+        notif_title = "🛡️ Admin Access Updated"
+        notif_msg = f"Your admin privileges were updated by {admin_user.name}."
+
+    target_emp.save()
+    invalidate_ops_cache(target_emp.id)
+    ActivityLog.objects.create(user=admin_user, action=action_msg)
+
+    # In-app notification
+    create_inapp_notification(
+        recipient=target_emp,
+        sender=admin_user,
+        title=notif_title,
+        message=notif_msg,
+        notification_type='admin_promotion',
+    )
+
+    # Email notification
+    send_task_notification_email(
+        target_emp.email,
+        f"[WisBees Operations] {notif_title}",
+        f"Hello {target_emp.name},\n\n{notif_msg}\n\nBest regards,\nWisBees Operations Portal"
+    )
+
+    return JsonResponse({
+        'success': True,
+        'message': action_msg,
+        'is_admin': bool(target_emp.role == 'admin' or target_emp.is_superadmin),
+        'employee': serialize_user(target_emp),
+    })
 
 
 @csrf_exempt
@@ -1131,11 +1336,28 @@ def api_admin_roles(request):
 @require_http_methods(['GET', 'POST'])
 def api_admin_tasks(request):
     user = get_current_user(request)
-    if not user or not (user.role == 'admin' or user.is_superadmin):
-        return JsonResponse({'error': 'Admin privileges required'}, status=403)
+    if not user:
+        return JsonResponse({'error': 'Unauthorized'}, status=401)
+
+    is_admin = bool(user.role == 'admin' or user.is_superadmin)
+    managed_depts = list(user.managed_departments or [])
+    if user.managed_department and user.managed_department not in managed_depts:
+        managed_depts.append(user.managed_department)
+    is_mgr = bool(user.is_manager or len(managed_depts) > 0)
+
+    if not (is_admin or is_mgr):
+        return JsonResponse({'error': 'Admin or Manager privileges required'}, status=403)
 
     if request.method == 'GET':
         tasks = WorkTask.objects.all().select_related('assigned_to', 'created_by').order_by('-created_at')
+        if not is_admin:
+            tasks = tasks.filter(
+                Q(department__in=managed_depts) |
+                Q(assigned_to__department__in=managed_depts) |
+                Q(created_by=user) |
+                Q(assigned_to=user)
+            )
+
         status_filter = request.GET.get('status')
         assignee_filter = request.GET.get('assigned_to')
         dept_filter = request.GET.get('department')
@@ -1145,7 +1367,7 @@ def api_admin_tasks(request):
         if assignee_filter:
             tasks = tasks.filter(assigned_to_id=assignee_filter)
         if dept_filter:
-            tasks = tasks.filter(assigned_to__department=dept_filter)
+            tasks = tasks.filter(Q(department=dept_filter) | Q(assigned_to__department=dept_filter))
 
         return JsonResponse({
             'tasks': [serialize_task(t) for t in tasks],
@@ -1167,16 +1389,24 @@ def api_admin_tasks(request):
         estimated_hours = float(data.get('estimated_hours', 0) or 0)
         tags = data.get('tags', '')
         attachment_url = data.get('attachment_url', '')
+        target_dept = (data.get('target_department') or data.get('department') or '').strip()
+
+        if not is_admin and managed_depts:
+            if target_dept and target_dept not in managed_depts:
+                return JsonResponse({'error': f'You can only assign tasks in your managed department: {", ".join(managed_depts)}'}, status=403)
+            if not target_dept:
+                target_dept = managed_depts[0]
 
         target_assignees = []
 
         if assign_mode == 'everyone':
+            if not is_admin:
+                return JsonResponse({'error': 'Only Superadmin can broadcast to everyone.'}, status=403)
             target_assignees = list(OperationUser.objects.filter(is_active=True))
             if not target_assignees:
                 return JsonResponse({'error': 'No active team members found to assign.'}, status=400)
 
         elif assign_mode == 'department':
-            target_dept = data.get('target_department', '').strip()
             if not target_dept:
                 return JsonResponse({'error': 'Please select a target department.'}, status=400)
             
@@ -1205,11 +1435,14 @@ def api_admin_tasks(request):
 
         created_tasks = []
         for assignee in target_assignees:
+            task_department = target_dept or assignee.department or 'Operations'
             task = WorkTask.objects.create(
                 title=title,
                 description=description,
                 assigned_to=assignee,
                 created_by=user,
+                department=task_department,
+                assigned_mode=assign_mode,
                 priority=priority,
                 status=data.get('status', 'Todo'),
                 deadline=deadline,
@@ -1224,9 +1457,10 @@ def api_admin_tasks(request):
                 DailyAssignedTask.objects.create(
                     title=title,
                     description=description,
-                    department=assignee.department or 'Operations',
+                    department=task_department,
                     assigned_by=user,
                     assigned_to=assignee,
+                    work_task=task,
                     task_type='Major' if priority in ['Urgent', 'High'] else 'Minor',
                     priority=priority,
                     due_date=deadline,
@@ -1234,6 +1468,16 @@ def api_admin_tasks(request):
                 )
             except Exception:
                 pass
+
+            # In-App Notification to Assignee
+            create_inapp_notification(
+                recipient=assignee,
+                sender=user,
+                title=f"📋 New Task Assigned: {title}",
+                message=f"{user.name} assigned you '{title}' in {task_department}. Deadline: {deadline or 'Flexible'}.",
+                notification_type='task_assigned',
+                task_id=task.id,
+            )
 
         invalidate_ops_cache()
         if len(target_assignees) == 1:
@@ -1248,10 +1492,24 @@ def api_admin_tasks(request):
 @require_http_methods(['GET', 'PUT', 'DELETE'])
 def api_admin_task_detail(request, pk):
     admin_user = get_current_user(request)
-    if not admin_user or not (admin_user.role == 'admin' or admin_user.is_superadmin):
-        return JsonResponse({'error': 'Admin privileges required'}, status=403)
+    if not admin_user:
+        return JsonResponse({'error': 'Unauthorized'}, status=401)
+
+    is_admin = bool(admin_user.role == 'admin' or admin_user.is_superadmin)
+    managed_depts = list(admin_user.managed_departments or [])
+    if admin_user.managed_department and admin_user.managed_department not in managed_depts:
+        managed_depts.append(admin_user.managed_department)
+    is_mgr = bool(admin_user.is_manager or len(managed_depts) > 0)
+
+    if not (is_admin or is_mgr):
+        return JsonResponse({'error': 'Admin or Manager privileges required'}, status=403)
 
     task = get_object_or_404(WorkTask, id=pk)
+
+    if not is_admin:
+        task_dept = task.department or (task.assigned_to.department if task.assigned_to else '')
+        if task_dept not in managed_depts and task.created_by != admin_user:
+            return JsonResponse({'error': 'Not authorized to manage this department task'}, status=403)
 
     if request.method == 'GET':
         logs = task.logs.all().order_by('-created_at')
@@ -1296,6 +1554,7 @@ def api_admin_task_detail(request, pk):
     if request.method == 'DELETE':
         title = task.title
         assignee_id = task.assigned_to_id
+        DailyAssignedTask.objects.filter(Q(work_task=task) | (Q(title=title) & Q(department=task.department))).delete()
         task.delete()
         invalidate_ops_cache(assignee_id)
         ActivityLog.objects.create(user=admin_user, action=f"Deleted task '{title}'")
@@ -1380,7 +1639,15 @@ def api_employee_tasks(request):
     if not emp:
         return JsonResponse({'error': 'Unauthorized'}, status=401)
 
-    tasks = WorkTask.objects.filter(assigned_to=emp).select_related('assigned_to', 'created_by').order_by('-created_at')
+    user_depts = list(emp.assigned_departments or [emp.department or 'Operations'])
+    if emp.department and emp.department not in user_depts:
+        user_depts.append(emp.department)
+
+    tasks = WorkTask.objects.filter(
+        Q(assigned_to=emp) |
+        (Q(department__in=user_depts) & Q(assigned_to__isnull=True))
+    ).select_related('assigned_to', 'created_by').order_by('-created_at')
+
     status_filter = request.GET.get('status')
     if status_filter:
         tasks = tasks.filter(status=status_filter)
@@ -1391,18 +1658,30 @@ def api_employee_tasks(request):
 
 
 @csrf_exempt
-@require_POST
+@require_http_methods(['POST', 'PUT'])
 def api_employee_update_task_status(request, pk):
     emp = get_current_user(request)
     if not emp:
         return JsonResponse({'error': 'Unauthorized'}, status=401)
 
-    task = get_object_or_404(WorkTask, id=pk, assigned_to=emp)
+    user_depts = list(emp.assigned_departments or [emp.department or 'Operations'])
+    if emp.department and emp.department not in user_depts:
+        user_depts.append(emp.department)
+
+    task = WorkTask.objects.filter(id=pk).first()
+    if not task:
+        return JsonResponse({'error': 'Task not found'}, status=404)
+
+    # Permission check: must be assigned to employee or part of the task department
+    if task.assigned_to and task.assigned_to != emp and task.department not in user_depts and not emp.is_manager and emp.role != 'admin':
+        return JsonResponse({'error': 'Unauthorized to update this task'}, status=403)
+
     data = parse_request_json(request)
     new_status = data.get('status')
     submission_notes = data.get('submission_notes', '')
     submission_link = data.get('submission_link', '')
     hours_logged = float(data.get('hours_spent', 0) or 0)
+    delay_reason = data.get('delay_reason', '')
 
     if new_status in ['Todo', 'In Progress', 'Under Review', 'Completed']:
         task.status = new_status
@@ -1410,11 +1689,87 @@ def api_employee_update_task_status(request, pk):
             task.submission_notes = submission_notes
         if submission_link:
             task.submission_link = submission_link
+        if delay_reason and not task.delay_reason:
+            task.delay_reason = delay_reason
+            task.delay_status = 'Pending'
 
         if new_status == 'Completed':
             task.completed_at = timezone.now()
 
+            # Award points upon completion if not already awarded
+            if getattr(task, 'points_awarded', 0) == 0:
+                p_map = {'Urgent': 30, 'High': 20, 'Medium': 10, 'Normal': 10, 'Low': 5}
+                awarded_pts = p_map.get(task.priority, 10)
+                task.points_awarded = awarded_pts
+                award_or_deduct_points(
+                    user=emp,
+                    points_delta=awarded_pts,
+                    reason=f"Completed deliverable: '{task.title}' ({task.priority} Priority)",
+                    task=task,
+                    awarded_by=task.created_by,
+                )
+
         task.save()
+
+        # Find manager to notify (in website and in email)
+        manager = task.created_by
+        if not manager and task.department:
+            dma = DepartmentManagerAssignment.objects.filter(department__name=task.department, is_active=True).first()
+            if dma:
+                manager = dma.manager
+
+        if manager and new_status in ['Under Review', 'Completed']:
+            # 1. In-App Website Notification
+            create_inapp_notification(
+                recipient=manager,
+                sender=emp,
+                title=f"📥 Task {new_status}: {task.title}",
+                message=f"{emp.name} marked '{task.title}' as {new_status}.\nNotes: {submission_notes or 'None'}\nLink: {submission_link or 'None'}",
+                notification_type='task_submission',
+                task_id=task.id,
+            )
+
+            # 2. Email Notification to Manager
+            email_body = f"""Hello {manager.name},
+
+Team member {emp.name} has submitted task '{task.title}' with status: {new_status}.
+
+Task: {task.title}
+Department: {task.department or emp.department}
+Submission Notes: {submission_notes or 'None'}
+Submission Link: {submission_link or 'None'}
+Submitted At: {timezone.now().strftime('%d %b %Y %H:%M')}
+
+You can review this deliverable on the WisBees Operations Portal.
+
+Best regards,
+WisBees Operations Portal
+"""
+            html_body = f"""
+            <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 560px; margin: 0 auto; padding: 24px; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 16px;">
+              <h2 style="color: #059669; margin-top: 0;">📥 Task Submitted: {task.title}</h2>
+              <p>Hello <strong>{manager.name}</strong>,</p>
+              <p><strong>{emp.name}</strong> has submitted deliverables for task <strong>"{task.title}"</strong>.</p>
+              <table style="width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 13px;">
+                <tr><td style="padding: 6px 0; color: #64748b;"><strong>Status:</strong></td><td style="color: #059669; font-weight: bold;">{new_status}</td></tr>
+                <tr><td style="padding: 6px 0; color: #64748b;"><strong>Department:</strong></td><td>{task.department or emp.department}</td></tr>
+                <tr><td style="padding: 6px 0; color: #64748b;"><strong>Submission Notes:</strong></td><td>{submission_notes or 'None'}</td></tr>
+                <tr><td style="padding: 6px 0; color: #64748b;"><strong>Deliverable Link:</strong></td><td><a href="{submission_link}">{submission_link or 'None'}</a></td></tr>
+              </table>
+              <div style="border-top: 1px solid #e2e8f0; padding-top: 12px; font-size: 11px; color: #94a3b8;">WisBees Operations Management Portal</div>
+            </div>
+            """
+            send_task_notification_email(manager.email, f"[WisBees Operations] Task {new_status} by {emp.name}: '{task.title}'", email_body, html_body)
+
+        # Sync to DailyAssignedTask
+        DailyAssignedTask.objects.filter(
+            Q(work_task=task) | (Q(title=task.title) & Q(department=task.department))
+        ).update(
+            status='Completed' if new_status == 'Completed' else 'In Progress',
+            completed_at=timezone.now() if new_status == 'Completed' else None,
+            submission_notes=submission_notes,
+            submission_link=submission_link,
+        )
 
         # Record WorkLog if hours or summary provided
         if hours_logged > 0 or submission_notes:
@@ -2993,7 +3348,20 @@ def api_assigned_tasks(request):
             'task_type': t.task_type,
             'priority': t.priority,
             'due_date': t.due_date.isoformat() if t.due_date else None,
+            'extended_deadline': t.extended_deadline.isoformat() if getattr(t, 'extended_deadline', None) else None,
+            'is_deadline_extended': bool(getattr(t, 'is_deadline_extended', False)),
+            'effective_deadline': (t.extended_deadline or t.due_date).isoformat() if (getattr(t, 'extended_deadline', None) or t.due_date) else None,
+            'is_overdue': bool((getattr(t, 'extended_deadline', None) or t.due_date) and timezone.now().date() > (getattr(t, 'extended_deadline', None) or t.due_date) and t.status != 'Completed'),
             'status': t.status,
+            'delay_reason': getattr(t, 'delay_reason', '') or '',
+            'delay_status': getattr(t, 'delay_status', 'None') or 'None',
+            'delay_reviewed_by': t.delay_reviewed_by.name if getattr(t, 'delay_reviewed_by', None) else '',
+            'delay_reviewed_at': t.delay_reviewed_at.strftime('%Y-%m-%d %H:%M') if getattr(t, 'delay_reviewed_at', None) else None,
+            'delay_review_notes': getattr(t, 'delay_review_notes', '') or '',
+            'points_awarded': getattr(t, 'points_awarded', 0) or 0,
+            'points_deducted': getattr(t, 'points_deducted', 0) or 0,
+            'submission_notes': getattr(t, 'submission_notes', '') or '',
+            'submission_link': getattr(t, 'submission_link', '') or '',
             'is_flagged': t.is_flagged,
             'flag_reason': t.flag_reason or '',
             'assigned_by': {
@@ -3008,6 +3376,7 @@ def api_assigned_tasks(request):
                 'email': t.assigned_to.email,
                 'designation': t.assigned_to.designation,
                 'emp_code': t.assigned_to.emp_code,
+                'points': getattr(t.assigned_to, 'points', 100),
             } if t.assigned_to else None,
             'completed_at': t.completed_at.isoformat() if t.completed_at else None,
             'created_at': t.created_at.strftime('%Y-%m-%d %H:%M'),
@@ -3093,18 +3462,40 @@ def api_create_assigned_task(request):
     if assign_mode == 'multiple' and assigned_to_ids:
         target_users = OperationUser.objects.filter(id__in=assigned_to_ids, is_active=True)
         for emp in target_users:
+            wt = WorkTask.objects.create(
+                title=title,
+                description=description,
+                department=department,
+                assigned_by=user,
+                assigned_to=emp,
+                created_by=user,
+                assigned_mode='multiple',
+                priority=priority,
+                status='Todo',
+                deadline=due_date,
+            )
             t = DailyAssignedTask.objects.create(
                 title=title,
                 description=description,
                 department=department,
                 assigned_by=user,
                 assigned_to=emp,
+                work_task=wt,
                 task_type=task_type,
                 priority=priority,
                 due_date=due_date,
                 status='Pending'
             )
             created_tasks.append(t)
+
+            create_inapp_notification(
+                recipient=emp,
+                sender=user,
+                title=f"📋 New Task Assigned: {title}",
+                message=f"Manager {user.name} assigned you '{title}' in {department}. Due: {due_date or 'Flexible'}.",
+                notification_type='task_assigned',
+                task_id=wt.id,
+            )
 
         ActivityLog.objects.create(
             user=user,
@@ -3113,23 +3504,46 @@ def api_create_assigned_task(request):
 
         return JsonResponse({
             'success': True,
-            'message': f"Task assigned to {len(created_tasks)} team members successfully!",
+            'message': f"Task assigned to {len(created_tasks)} team members successfully and reflected on their dashboards!",
             'task_ids': [t.id for t in created_tasks],
         })
 
     elif assign_mode == 'single' and assigned_to_id:
         assigned_to_user = OperationUser.objects.filter(id=assigned_to_id).first()
+        wt = WorkTask.objects.create(
+            title=title,
+            description=description,
+            department=department,
+            assigned_by=user,
+            assigned_to=assigned_to_user,
+            created_by=user,
+            assigned_mode='single',
+            priority=priority,
+            status='Todo',
+            deadline=due_date,
+        )
         task = DailyAssignedTask.objects.create(
             title=title,
             description=description,
             department=department,
             assigned_by=user,
             assigned_to=assigned_to_user,
+            work_task=wt,
             task_type=task_type,
             priority=priority,
             due_date=due_date,
             status='Pending'
         )
+
+        if assigned_to_user:
+            create_inapp_notification(
+                recipient=assigned_to_user,
+                sender=user,
+                title=f"📋 New Task Assigned: {title}",
+                message=f"Manager {user.name} assigned you '{title}' in {department}. Due: {due_date or 'Flexible'}.",
+                notification_type='task_assigned',
+                task_id=wt.id,
+            )
 
         ActivityLog.objects.create(
             user=user,
@@ -3138,13 +3552,53 @@ def api_create_assigned_task(request):
 
         return JsonResponse({
             'success': True,
-            'message': f"Task assigned to {assigned_to_user.name if assigned_to_user else 'team member'} successfully!",
+            'message': f"Task assigned to {assigned_to_user.name if assigned_to_user else 'team member'} successfully and reflected in their workspace!",
             'task_id': task.id,
+            'work_task_id': wt.id,
         })
 
     else:
-        # Department broadcast mode
-        task = DailyAssignedTask.objects.create(
+        # Department group broadcast mode -> assign to every team member of this department
+        dept_members = list(OperationUser.objects.filter(is_active=True).filter(
+            Q(department__iexact=department) | Q(assigned_departments__icontains=department)
+        ))
+
+        for member in dept_members:
+            wt = WorkTask.objects.create(
+                title=title,
+                description=description,
+                department=department,
+                assigned_by=user,
+                assigned_to=member,
+                created_by=user,
+                assigned_mode='department',
+                priority=priority,
+                status='Todo',
+                deadline=due_date,
+            )
+            DailyAssignedTask.objects.create(
+                title=title,
+                description=description,
+                department=department,
+                assigned_by=user,
+                assigned_to=member,
+                work_task=wt,
+                task_type=task_type,
+                priority=priority,
+                due_date=due_date,
+                status='Pending'
+            )
+            create_inapp_notification(
+                recipient=member,
+                sender=user,
+                title=f"📢 Department Task Assigned: {title}",
+                message=f"Manager {user.name} assigned a group task to {department}: '{title}'. Due: {due_date or 'Flexible'}.",
+                notification_type='task_assigned',
+                task_id=wt.id,
+            )
+
+        # Also create 1 general broadcast record
+        broadcast_task = DailyAssignedTask.objects.create(
             title=title,
             description=description,
             department=department,
@@ -3158,13 +3612,14 @@ def api_create_assigned_task(request):
 
         ActivityLog.objects.create(
             user=user,
-            action=f"Created broadcast task '{title}' for department ({department})"
+            action=f"Created broadcast task '{title}' for department ({department}) ({len(dept_members)} members)"
         )
 
         return JsonResponse({
             'success': True,
-            'message': f"Broadcast task assigned to department {department} successfully!",
-            'task_id': task.id,
+            'message': f"Broadcast task assigned to department {department} and dispatched to {len(dept_members)} team member(s)!",
+            'task_id': broadcast_task.id,
+            'assigned_count': len(dept_members),
         })
 
 
@@ -3173,6 +3628,7 @@ def api_create_assigned_task(request):
 def api_update_assigned_task_status(request, pk):
     """
     Updates the status or blocker flag of an assigned task.
+    When completed: notifies manager in-app & via email, and awards points.
     """
     user = get_current_user(request)
     if not user:
@@ -3184,12 +3640,68 @@ def api_update_assigned_task_status(request, pk):
     status = data.get('status')
     is_flagged = data.get('is_flagged')
     flag_reason = data.get('flag_reason')
+    submission_notes = data.get('submission_notes', '')
+    submission_link = data.get('submission_link', '')
+
+    if submission_notes:
+        task.submission_notes = submission_notes
+    if submission_link:
+        task.submission_link = submission_link
 
     if status:
         task.status = status
         if status == 'Completed':
             task.completed_at = timezone.now()
             task.is_flagged = False
+
+            # Award points upon completion
+            if getattr(task, 'points_awarded', 0) == 0:
+                p_map = {'Urgent': 30, 'High': 20, 'Medium': 10, 'Normal': 10, 'Low': 5}
+                awarded_pts = p_map.get(task.priority, 10)
+                task.points_awarded = awarded_pts
+                target_user = task.assigned_to or user
+                award_or_deduct_points(
+                    user=target_user,
+                    points_delta=awarded_pts,
+                    reason=f"Completed task: '{task.title}' ({task.priority} Priority)",
+                    task=task.work_task,
+                    awarded_by=task.assigned_by,
+                )
+
+            # Notify manager (In website and in email)
+            manager = task.assigned_by
+            if not manager and task.department:
+                dma = DepartmentManagerAssignment.objects.filter(department__name=task.department, is_active=True).first()
+                if dma:
+                    manager = dma.manager
+
+            submitter = task.assigned_to or user
+            if manager:
+                create_inapp_notification(
+                    recipient=manager,
+                    sender=submitter,
+                    title=f"📥 Task Completed: {task.title}",
+                    message=f"{submitter.name} completed task '{task.title}'. Notes: {submission_notes or 'None'}. Link: {submission_link or 'None'}.",
+                    notification_type='task_submission',
+                    task_id=task.id,
+                )
+
+                email_body = f"""Hello {manager.name},
+
+Team member {submitter.name} has submitted task '{task.title}' as Completed.
+
+Task: {task.title}
+Department: {task.department}
+Submission Notes: {submission_notes or 'None'}
+Submission Link: {submission_link or 'None'}
+
+You can review this deliverable on the WisBees Operations Portal.
+
+Best regards,
+WisBees Operations Portal
+"""
+                send_task_notification_email(manager.email, f"[WisBees Operations] Task Completed by {submitter.name}: '{task.title}'", email_body)
+
         elif status == 'Flagged':
             task.is_flagged = True
 
@@ -3205,11 +3717,467 @@ def api_update_assigned_task_status(request, pk):
 
     task.save()
 
+    # Sync to WorkTask if linked
+    if task.work_task:
+        task.work_task.status = 'Completed' if task.status == 'Completed' else ('In Progress' if task.status in ['In Progress', 'Flagged'] else 'Todo')
+        if task.status == 'Completed':
+            task.work_task.completed_at = timezone.now()
+        if submission_notes:
+            task.work_task.submission_notes = submission_notes
+        if submission_link:
+            task.work_task.submission_link = submission_link
+        task.work_task.save()
+
     return JsonResponse({
         'success': True,
         'message': 'Task updated successfully',
         'status': task.status,
         'is_flagged': task.is_flagged,
+    })
+
+
+# ─────────────────────────────────────────────────────────────
+# TASK WORKFLOW ENHANCEMENTS: DEADLINES, DELAYS, POINTS, NOTIFICATIONS
+# ─────────────────────────────────────────────────────────────
+
+@csrf_exempt
+@require_POST
+def api_task_extend_deadline(request, pk):
+    """
+    Manager or Admin extends a task's deadline.
+    Must display as 'Extended Deadline (Final Deadline)' across all portals.
+    """
+    user = get_current_user(request)
+    if not user:
+        return JsonResponse({'success': False, 'error': 'Unauthorized'}, status=401)
+
+    is_admin = bool(user.role == 'admin' or user.is_superadmin)
+    managed_depts = list(user.managed_departments or [])
+    if user.managed_department and user.managed_department not in managed_depts:
+        managed_depts.append(user.managed_department)
+    is_mgr = bool(user.is_manager or len(managed_depts) > 0)
+
+    if not (is_admin or is_mgr):
+        return JsonResponse({'success': False, 'error': 'Only Admin or Assigned Manager can extend deadlines.'}, status=403)
+
+    data = parse_request_json(request)
+    extended_deadline_str = data.get('extended_deadline') or data.get('new_deadline')
+    notes = (data.get('notes') or '').strip()
+
+    if not extended_deadline_str:
+        return JsonResponse({'success': False, 'error': 'New extended deadline date is required.'}, status=400)
+
+    try:
+        new_deadline = datetime.strptime(extended_deadline_str, '%Y-%m-%d').date()
+    except Exception:
+        return JsonResponse({'success': False, 'error': 'Invalid date format. Use YYYY-MM-DD.'}, status=400)
+
+    work_task = WorkTask.objects.filter(id=pk).first()
+    daily_task = DailyAssignedTask.objects.filter(id=pk).first()
+
+    if not work_task and not daily_task:
+        return JsonResponse({'success': False, 'error': 'Task not found.'}, status=404)
+
+    target_dept = (work_task.department if work_task else daily_task.department) or ''
+    if not is_admin and managed_depts and target_dept not in managed_depts:
+        if (work_task and work_task.created_by != user) and (daily_task and daily_task.assigned_by != user):
+            return JsonResponse({'success': False, 'error': 'You can only extend deadlines for your managed department tasks.'}, status=403)
+
+    assignee = None
+    task_title = ''
+
+    if work_task:
+        work_task.extended_deadline = new_deadline
+        work_task.is_deadline_extended = True
+        work_task.save()
+        assignee = work_task.assigned_to
+        task_title = work_task.title
+        DailyAssignedTask.objects.filter(Q(work_task=work_task) | (Q(title=work_task.title) & Q(department=work_task.department))).update(
+            extended_deadline=new_deadline,
+            is_deadline_extended=True
+        )
+
+    if daily_task:
+        daily_task.extended_deadline = new_deadline
+        daily_task.is_deadline_extended = True
+        daily_task.save()
+        if not assignee:
+            assignee = daily_task.assigned_to
+        if not task_title:
+            task_title = daily_task.title
+
+    if assignee:
+        create_inapp_notification(
+            recipient=assignee,
+            sender=user,
+            title=f"📅 Deadline Extended: {task_title}",
+            message=f"Manager {user.name} extended the deadline for '{task_title}' to {new_deadline.strftime('%d %b %Y')} (Final Deadline). {notes}",
+            notification_type='deadline_extended',
+            task_id=work_task.id if work_task else daily_task.id,
+        )
+
+    ActivityLog.objects.create(
+        user=user,
+        action=f"Extended deadline of '{task_title}' to {new_deadline} (Final Deadline)"
+    )
+
+    return JsonResponse({
+        'success': True,
+        'message': f"Deadline extended to {new_deadline.strftime('%d %b %Y')} (Final Deadline) successfully!",
+        'extended_deadline': new_deadline.strftime('%Y-%m-%d'),
+        'is_deadline_extended': True
+    })
+
+
+@csrf_exempt
+@require_POST
+def api_task_explain_delay(request, pk):
+    """
+    Employee or Manager submits a delay explanation message if a task is overdue or delayed.
+    Status moves to 'Pending Review'.
+    Notification sent in-app & via email to the assigner/manager.
+    """
+    user = get_current_user(request)
+    if not user:
+        return JsonResponse({'success': False, 'error': 'Unauthorized'}, status=401)
+
+    data = parse_request_json(request)
+    delay_reason = (data.get('delay_reason') or '').strip()
+    if not delay_reason:
+        return JsonResponse({'success': False, 'error': 'Please provide a detailed explanation of the delay.'}, status=400)
+
+    work_task = WorkTask.objects.filter(id=pk).first()
+    daily_task = DailyAssignedTask.objects.filter(id=pk).first()
+
+    if not work_task and not daily_task:
+        return JsonResponse({'success': False, 'error': 'Task not found.'}, status=404)
+
+    assignee = work_task.assigned_to if work_task else daily_task.assigned_to
+    manager = work_task.created_by if work_task else daily_task.assigned_by
+    task_title = work_task.title if work_task else daily_task.title
+    task_dept = work_task.department if work_task else daily_task.department
+
+    if work_task:
+        work_task.delay_reason = delay_reason
+        work_task.delay_status = 'Pending'
+        work_task.save()
+
+    if daily_task:
+        daily_task.delay_reason = delay_reason
+        daily_task.delay_status = 'Pending'
+        daily_task.save()
+
+    if not manager and task_dept:
+        mgr_assignment = DepartmentManagerAssignment.objects.filter(department__name=task_dept, is_active=True).first()
+        if mgr_assignment:
+            manager = mgr_assignment.manager
+
+    if manager:
+        create_inapp_notification(
+            recipient=manager,
+            sender=user,
+            title=f"⚠️ Delay Explanation: {task_title}",
+            message=f"{user.name} submitted a delay explanation for '{task_title}': \"{delay_reason}\". Please review and Accept or Reject.",
+            notification_type='delay_explanation',
+            task_id=work_task.id if work_task else daily_task.id,
+        )
+
+        email_body = f"""Hello {manager.name},
+
+{user.name} has submitted a delay explanation for overdue task '{task_title}'.
+
+Task: {task_title}
+Department: {task_dept}
+Explanation:
+"{delay_reason}"
+
+Please login to the WisBees Operations Portal to review and Accept or Reject this explanation.
+If accepted, no penalty is applied. If rejected, points will be deducted.
+
+Best regards,
+WisBees Operations Portal
+"""
+        html_body = f"""
+        <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 540px; margin: 0 auto; padding: 24px; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 16px;">
+          <h2 style="color: #d97706; margin-top: 0;">⚠️ Task Delay Explanation Submitted</h2>
+          <p>Hello <strong>{manager.name}</strong>,</p>
+          <p><strong>{user.name}</strong> has submitted a delay explanation for the task <strong>"{task_title}"</strong>.</p>
+          <div style="background: #fffbeb; border-left: 4px solid #f59e0b; padding: 14px 16px; border-radius: 8px; margin: 20px 0;">
+            <p style="margin: 0; font-size: 14px; color: #92400e; font-style: italic;">"{delay_reason}"</p>
+          </div>
+          <p style="font-size: 13px; color: #64748b;">Please review this explanation on the Operations Portal to <strong>Accept</strong> (no penalty) or <strong>Reject</strong> (deduct penalty points).</p>
+          <div style="border-top: 1px solid #e2e8f0; padding-top: 12px; font-size: 11px; color: #94a3b8;">WisBees Operations Portal</div>
+        </div>
+        """
+        send_task_notification_email(manager.email, f"[WisBees Delay Review] {user.name} submitted explanation for '{task_title}'", email_body, html_body)
+
+    return JsonResponse({
+        'success': True,
+        'message': 'Delay explanation submitted successfully and sent to manager for review.',
+        'delay_status': 'Pending'
+    })
+
+
+@csrf_exempt
+@require_POST
+def api_task_review_delay(request, pk):
+    """
+    Manager or Admin reviews the delay explanation:
+    - action == 'accept': delay_status = 'Accepted', no penalty.
+    - action == 'reject': delay_status = 'Rejected', points deducted!
+      If assigned to a group/team, points deducted from all members of that group/team!
+    """
+    user = get_current_user(request)
+    if not user:
+        return JsonResponse({'success': False, 'error': 'Unauthorized'}, status=401)
+
+    is_admin = bool(user.role == 'admin' or user.is_superadmin)
+    managed_depts = list(user.managed_departments or [])
+    if user.managed_department and user.managed_department not in managed_depts:
+        managed_depts.append(user.managed_department)
+    is_mgr = bool(user.is_manager or len(managed_depts) > 0)
+
+    if not (is_admin or is_mgr):
+        return JsonResponse({'success': False, 'error': 'Only Admin or Manager can review delay explanations.'}, status=403)
+
+    data = parse_request_json(request)
+    action = (data.get('action') or '').strip().lower()  # 'accept' or 'reject'
+    notes = (data.get('notes') or '').strip()
+    penalty_points = int(data.get('penalty_points', 10) or 10)
+
+    if action not in ['accept', 'reject']:
+        return JsonResponse({'success': False, 'error': "Action must be 'accept' or 'reject'."}, status=400)
+
+    work_task = WorkTask.objects.filter(id=pk).first()
+    daily_task = DailyAssignedTask.objects.filter(id=pk).first()
+
+    if not work_task and not daily_task:
+        return JsonResponse({'success': False, 'error': 'Task not found.'}, status=404)
+
+    task_title = work_task.title if work_task else daily_task.title
+    task_dept = work_task.department if work_task else daily_task.department
+
+    target_employees = []
+    if work_task and work_task.assigned_to:
+        target_employees = [work_task.assigned_to]
+    elif daily_task and daily_task.assigned_to:
+        target_employees = [daily_task.assigned_to]
+    elif task_dept:
+        target_employees = list(OperationUser.objects.filter(is_active=True).filter(
+            Q(department=task_dept) | Q(assigned_departments__icontains=task_dept)
+        ))
+
+    new_delay_status = 'Accepted' if action == 'accept' else 'Rejected'
+
+    if work_task:
+        work_task.delay_status = new_delay_status
+        work_task.delay_reviewed_by = user
+        work_task.delay_reviewed_at = timezone.now()
+        work_task.delay_review_notes = notes
+        if action == 'reject':
+            work_task.points_deducted = penalty_points
+        work_task.save()
+
+    if daily_task:
+        daily_task.delay_status = new_delay_status
+        daily_task.delay_reviewed_by = user
+        daily_task.delay_reviewed_at = timezone.now()
+        daily_task.delay_review_notes = notes
+        if action == 'reject':
+            daily_task.points_deducted = penalty_points
+        daily_task.save()
+
+    if action == 'accept':
+        for emp in target_employees:
+            create_inapp_notification(
+                recipient=emp,
+                sender=user,
+                title=f"✅ Delay Explanation Accepted: {task_title}",
+                message=f"Manager {user.name} accepted your delay explanation for '{task_title}'. No points deducted. {notes}",
+                notification_type='delay_decision',
+                task_id=work_task.id if work_task else daily_task.id,
+            )
+        msg_text = f"Delay explanation for '{task_title}' ACCEPTED. No points deducted."
+    else:
+        for emp in target_employees:
+            award_or_deduct_points(
+                user=emp,
+                points_delta=-penalty_points,
+                reason=f"Delay explanation rejected for task: '{task_title}' (Penalty: -{penalty_points} pts)",
+                task=work_task,
+                awarded_by=user,
+            )
+            create_inapp_notification(
+                recipient=emp,
+                sender=user,
+                title=f"❌ Delay Explanation Rejected: {task_title}",
+                message=f"Manager {user.name} rejected your delay explanation for '{task_title}'. {penalty_points} points have been deducted. {notes}",
+                notification_type='delay_decision',
+                task_id=work_task.id if work_task else daily_task.id,
+            )
+        msg_text = f"Delay explanation for '{task_title}' REJECTED. Deducted {penalty_points} points from {len(target_employees)} team member(s)."
+
+    ActivityLog.objects.create(
+        user=user,
+        action=f"Reviewed delay for '{task_title}': {new_delay_status} ({msg_text})"
+    )
+
+    return JsonResponse({
+        'success': True,
+        'message': msg_text,
+        'delay_status': new_delay_status,
+        'points_deducted': penalty_points if action == 'reject' else 0,
+    })
+
+
+@csrf_exempt
+@require_http_methods(['DELETE', 'POST'])
+def api_delete_task(request, pk):
+    """
+    Deletes a task. Permitted for both Admin and the assigned department Manager.
+    """
+    user = get_current_user(request)
+    if not user:
+        return JsonResponse({'success': False, 'error': 'Unauthorized'}, status=401)
+
+    is_admin = bool(user.role == 'admin' or user.is_superadmin)
+    managed_depts = list(user.managed_departments or [])
+    if user.managed_department and user.managed_department not in managed_depts:
+        managed_depts.append(user.managed_department)
+    is_mgr = bool(user.is_manager or len(managed_depts) > 0)
+
+    if not (is_admin or is_mgr):
+        return JsonResponse({'success': False, 'error': 'Only Admin or Assigned Manager can delete tasks.'}, status=403)
+
+    work_task = WorkTask.objects.filter(id=pk).first()
+    daily_task = DailyAssignedTask.objects.filter(id=pk).first()
+
+    if not work_task and not daily_task:
+        return JsonResponse({'success': False, 'error': 'Task not found.'}, status=404)
+
+    task_dept = (work_task.department if work_task else daily_task.department) or ''
+    created_by = work_task.created_by if work_task else daily_task.assigned_by
+
+    if not is_admin:
+        if managed_depts and task_dept not in managed_depts and created_by != user:
+            return JsonResponse({'success': False, 'error': 'You can only delete tasks for your managed department.'}, status=403)
+
+    task_title = work_task.title if work_task else daily_task.title
+
+    if work_task:
+        DailyAssignedTask.objects.filter(Q(work_task=work_task) | (Q(title=work_task.title) & Q(department=work_task.department))).delete()
+        work_task.delete()
+
+    if daily_task:
+        if daily_task.work_task:
+            daily_task.work_task.delete()
+        daily_task.delete()
+
+    invalidate_ops_cache()
+    ActivityLog.objects.create(user=user, action=f"Deleted task '{task_title}'")
+
+    return JsonResponse({
+        'success': True,
+        'message': f"Task '{task_title}' deleted successfully."
+    })
+
+
+@csrf_exempt
+@require_GET
+def api_get_notifications(request):
+    """
+    Returns unread and recent notifications for the logged in user.
+    """
+    user = get_current_user(request)
+    if not user:
+        return JsonResponse({'success': False, 'error': 'Unauthorized'}, status=401)
+
+    notifications = Notification.objects.filter(recipient=user).select_related('sender').order_by('-created_at')[:40]
+    unread_count = Notification.objects.filter(recipient=user, is_read=False).count()
+
+    data = [
+        {
+            'id': n.id,
+            'title': n.title,
+            'message': n.message,
+            'notification_type': n.notification_type,
+            'task_id': n.task_id,
+            'link': n.link,
+            'is_read': n.is_read,
+            'created_at': n.created_at.strftime('%d %b %Y %H:%M'),
+            'sender_name': n.sender.name if n.sender else 'System',
+        }
+        for n in notifications
+    ]
+
+    return JsonResponse({
+        'success': True,
+        'unread_count': unread_count,
+        'notifications': data,
+    })
+
+
+@csrf_exempt
+@require_POST
+def api_mark_notification_read(request, pk):
+    user = get_current_user(request)
+    if not user:
+        return JsonResponse({'success': False, 'error': 'Unauthorized'}, status=401)
+
+    notif = Notification.objects.filter(id=pk, recipient=user).first()
+    if notif:
+        notif.is_read = True
+        notif.save(update_fields=['is_read'])
+
+    return JsonResponse({'success': True, 'message': 'Notification marked as read.'})
+
+
+@csrf_exempt
+@require_POST
+def api_mark_all_notifications_read(request):
+    user = get_current_user(request)
+    if not user:
+        return JsonResponse({'success': False, 'error': 'Unauthorized'}, status=401)
+
+    Notification.objects.filter(recipient=user, is_read=False).update(is_read=True)
+    return JsonResponse({'success': True, 'message': 'All notifications marked as read.'})
+
+
+@csrf_exempt
+@require_GET
+def api_get_user_points(request):
+    """
+    Returns point balance and transaction log for the user.
+    """
+    user = get_current_user(request)
+    if not user:
+        return JsonResponse({'success': False, 'error': 'Unauthorized'}, status=401)
+
+    target_user_id = request.GET.get('user_id')
+    target_user = user
+    if target_user_id and (user.role == 'admin' or user.is_superadmin or user.is_manager):
+        found = OperationUser.objects.filter(id=target_user_id).first()
+        if found:
+            target_user = found
+
+    txs = PointTransaction.objects.filter(user=target_user).select_related('created_by', 'task').order_by('-created_at')[:50]
+
+    return JsonResponse({
+        'success': True,
+        'user_id': target_user.id,
+        'user_name': target_user.name,
+        'points': getattr(target_user, 'points', 100),
+        'transactions': [
+            {
+                'id': tx.id,
+                'points': tx.points,
+                'reason': tx.reason,
+                'task_title': tx.task.title if tx.task else '',
+                'created_by': tx.created_by.name if tx.created_by else 'System',
+                'created_at': tx.created_at.strftime('%d %b %Y %H:%M'),
+            }
+            for tx in txs
+        ]
     })
 
 

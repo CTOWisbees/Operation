@@ -23,6 +23,7 @@ urlpatterns = [
     path('admin/department-matrix', views.api_admin_department_matrix, name='api_admin_department_matrix'),
     path('admin/employees', views.api_admin_employees, name='api_admin_employees'),
     path('admin/employees/<int:pk>', views.api_admin_employee_detail, name='api_admin_employee_detail'),
+    path('admin/employees/<int:pk>/toggle-admin', views.api_admin_toggle_admin_role, name='api_admin_toggle_admin_role'),
     path('admin/roles', views.api_admin_roles, name='api_admin_roles'),
     path('admin/tasks', views.api_admin_tasks, name='api_admin_tasks'),
     path('admin/tasks/<int:pk>', views.api_admin_task_detail, name='api_admin_task_detail'),
@@ -31,6 +32,19 @@ urlpatterns = [
     path('tracker/assigned-tasks', views.api_assigned_tasks, name='api_assigned_tasks'),
     path('tracker/assigned-tasks/create', views.api_create_assigned_task, name='api_create_assigned_task'),
     path('tracker/assigned-tasks/<int:pk>/status', views.api_update_assigned_task_status, name='api_update_assigned_task_status'),
+    path('tracker/assigned-tasks/<int:pk>/delete', views.api_delete_task, name='api_delete_assigned_task'),
+
+    # Task Workflow Extensions, Delay Explanations, Reviews & Deletion
+    path('tasks/<int:pk>/extend-deadline', views.api_task_extend_deadline, name='api_task_extend_deadline'),
+    path('tasks/<int:pk>/explain-delay', views.api_task_explain_delay, name='api_task_explain_delay'),
+    path('tasks/<int:pk>/review-delay', views.api_task_review_delay, name='api_task_review_delay'),
+    path('tasks/<int:pk>/delete', views.api_delete_task, name='api_delete_task'),
+
+    # In-App Notifications & Performance Points
+    path('notifications', views.api_get_notifications, name='api_get_notifications'),
+    path('notifications/<int:pk>/read', views.api_mark_notification_read, name='api_mark_notification_read'),
+    path('notifications/mark-all-read', views.api_mark_all_notifications_read, name='api_mark_all_notifications_read'),
+    path('user/points', views.api_get_user_points, name='api_get_user_points'),
 
     # Daily Work Tracker Endpoints (BRD Feature Set)
     path('tracker/daily', views.api_tracker_get, name='api_tracker_get'),

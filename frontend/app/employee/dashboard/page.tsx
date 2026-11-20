@@ -175,7 +175,7 @@ export default function EmployeeDashboardPage() {
       <AttendanceTimerWidget />
 
       {/* ─── 1. KEY TASK METRICS ─── */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4">
         {/* Total Assigned */}
         <div className="p-4 sm:p-5 bg-[var(--card-bg)] border border-[var(--card-border)] rounded-2xl sm:rounded-3xl shadow-xs space-y-2 sm:space-y-3 transition-colors">
           <div className="flex items-center justify-between">
@@ -244,6 +244,24 @@ export default function EmployeeDashboardPage() {
             </div>
             <div className="text-[10px] sm:text-[11px] font-semibold text-emerald-600 dark:text-emerald-400 mt-0.5">
               <span>{stats.completion_rate ?? 0}% completed rate</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Performance Points */}
+        <div className="p-4 sm:p-5 bg-gradient-to-br from-amber-500/10 via-amber-500/5 to-transparent border border-amber-300/80 dark:border-amber-800/80 rounded-2xl sm:rounded-3xl shadow-xs space-y-2 sm:space-y-3 col-span-2 sm:col-span-1 transition-colors">
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] sm:text-[11px] font-extrabold uppercase tracking-wider text-amber-700 dark:text-amber-400">Points</span>
+            <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl sm:rounded-2xl bg-amber-100 dark:bg-amber-900/50 text-amber-600 dark:text-amber-300 flex items-center justify-center">
+              <Star className="w-3.5 h-3.5 sm:w-4 sm:h-4 fill-amber-500 text-amber-500" />
+            </div>
+          </div>
+          <div>
+            <div className="text-xl sm:text-3xl font-black text-amber-700 dark:text-amber-300">
+              {employee.points ?? 100}
+            </div>
+            <div className="text-[10px] sm:text-[11px] font-bold text-amber-800/90 dark:text-amber-200/90 mt-0.5">
+              <span>Performance Score ⭐</span>
             </div>
           </div>
         </div>

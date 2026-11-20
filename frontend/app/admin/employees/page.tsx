@@ -24,7 +24,8 @@ import {
   Sparkles,
   Award,
   Plus,
-  Trash
+  Trash,
+  Crown
 } from 'lucide-react';
 import { api } from '@/lib/api';
 
@@ -49,12 +50,15 @@ export default function AdminEmployeesPage() {
   const [deleteConfirmEmp, setDeleteConfirmEmp] = useState<any | null>(null);
   const [selectedEmp, setSelectedEmp] = useState<any>(null);
   const [saving, setSaving] = useState(false);
+  const [toggleAdminEmp, setToggleAdminEmp] = useState<any | null>(null);
+  const [togglingAdmin, setTogglingAdmin] = useState(false);
 
   // Form State (matching Django Admin screenshot style)
   const [formName, setFormName] = useState('');
   const [formEmail, setFormEmail] = useState('');
   const [formPassword, setFormPassword] = useState('employee123');
   const [formIsActive, setFormIsActive] = useState(true);
+  const [formIsAdmin, setFormIsAdmin] = useState(false);
   const [formPhone, setFormPhone] = useState('');
   const [formDesignation, setFormDesignation] = useState('Operations Associate');
   const [formDepartmentAccessRows, setFormDepartmentAccessRows] = useState<DepartmentAccessRow[]>([]);
@@ -141,6 +145,7 @@ export default function AdminEmployeesPage() {
     setFormEmail('');
     setFormPassword('employee123');
     setFormIsActive(true);
+    setFormIsAdmin(false);
     setFormPhone('');
     setFormDesignation('Operations Associate');
     
@@ -162,6 +167,7 @@ export default function AdminEmployeesPage() {
     setFormEmail(emp.email || '');
     setFormPassword('');
     setFormIsActive(emp.is_active !== undefined ? emp.is_active : emp.status === 'Active');
+    setFormIsAdmin(Boolean(emp.role === 'admin' || emp.is_superadmin));
     setFormPhone(emp.phone || '');
     setFormDesignation(emp.designation || '');
     
@@ -268,6 +274,9 @@ export default function AdminEmployeesPage() {
         email: formEmail,
         password: formPassword,
         is_active: formIsActive,
+        role: formIsAdmin ? 'admin' : 'employee',
+        is_superadmin: formIsAdmin,
+        is_admin: formIsAdmin,
         phone: formPhone,
         designation: formDesignation,
         department: deptNames[0] || 'Operations',
@@ -280,7 +289,11 @@ export default function AdminEmployeesPage() {
       });
 
       if (res.data?.success) {
-        showAlert('New OP user account created successfully with department access!');
+        showAlert(
+          formIsAdmin
+            ? 'New Administrator account created successfully with full Admin privileges!'
+            : 'New OP user account created successfully with department access!'
+        );
         setShowAddModal(false);
         fetchData();
       }
@@ -315,6 +328,9 @@ export default function AdminEmployeesPage() {
         full_name: formName,
         phone: formPhone,
         designation: formDesignation,
+        role: formIsAdmin ? 'admin' : 'employee',
+        is_superadmin: formIsAdmin,
+        is_admin: formIsAdmin,
         department: deptNames[0] || 'Operations',
         assigned_departments: deptNames,
         department_ids: deptIds,
@@ -328,7 +344,7 @@ export default function AdminEmployeesPage() {
 
       const res = await api.put(`/admin/employees/${selectedEmp.id}`, payload);
       if (res.data?.success) {
-        showAlert('Employee profile, credentials, and department accesses updated!');
+        showAlert('Employee profile, credentials, role scopes, and admin access updated!');
         setShowEditModal(false);
         fetchData();
       }
@@ -336,6 +352,29 @@ export default function AdminEmployeesPage() {
       showAlert(err.response?.data?.error || 'Failed to update employee.', 'error');
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleToggleAdminRole = async (emp: any) => {
+    const isCurrentlyAdmin = Boolean(emp.role === 'admin' || emp.is_superadmin);
+    const actionLabel = isCurrentlyAdmin ? 'Revoke Admin Access' : 'Assign Full Admin Access';
+
+    setTogglingAdmin(true);
+    try {
+      const res = await api.post(`/admin/employees/${emp.id}/toggle-admin`, {
+        make_admin: !isCurrentlyAdmin,
+      });
+      if (res.data?.success) {
+        showAlert(res.data.message || `${actionLabel} successful for ${emp.name}!`);
+        setToggleAdminEmp(null);
+        fetchData();
+      } else {
+        showAlert(res.data?.error || `Failed to update admin access.`, 'error');
+      }
+    } catch (err: any) {
+      showAlert(err.response?.data?.error || `Failed to update admin access.`, 'error');
+    } finally {
+      setTogglingAdmin(false);
     }
   };
 
@@ -493,6 +532,7 @@ export default function AdminEmployeesPage() {
             <thead className="bg-[var(--hover-bg)] border-b border-[var(--card-border)] text-[var(--text-muted)] uppercase tracking-wider font-bold text-[10px]">
               <tr>
                 <th className="py-4 px-6">OP User / Employee</th>
+                <th className="py-4 px-6">System Access</th>
                 <th className="py-4 px-6">Email & Code</th>
                 <th className="py-4 px-6">Department Access</th>
                 <th className="py-4 px-6">Assigned Roles</th>
@@ -503,7 +543,7 @@ export default function AdminEmployeesPage() {
             <tbody className="divide-y divide-[var(--card-border)]">
               {loading && employees.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="py-12 text-center text-[var(--text-muted)]">
+                  <td colSpan={7} className="py-12 text-center text-[var(--text-muted)]">
                     <div className="flex items-center justify-center gap-2">
                       <RefreshCw className="w-4 h-4 animate-spin text-emerald-600" />
                       <span>Loading OP users...</span>
@@ -512,13 +552,14 @@ export default function AdminEmployeesPage() {
                 </tr>
               ) : filteredEmployees.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="py-12 text-center text-[var(--text-muted)]">
+                  <td colSpan={7} className="py-12 text-center text-[var(--text-muted)]">
                     No OP users found matching filter or search criteria.
                   </td>
                 </tr>
               ) : (
                 filteredEmployees.map((emp) => {
                   const displayName = emp.full_name || emp.name;
+                  const isUserAdmin = Boolean(emp.role === 'admin' || emp.is_superadmin);
                   const depts =
                     emp.department_accesses && emp.department_accesses.length > 0
                       ? emp.department_accesses.map((da: any) => da.name)
@@ -536,16 +577,50 @@ export default function AdminEmployeesPage() {
                       {/* Name & Designation */}
                       <td className="py-4 px-6">
                         <div className="flex items-center gap-3">
-                          <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-emerald-600 to-teal-700 text-white flex items-center justify-center font-black text-sm shrink-0 shadow-xs">
+                          <div className={`w-10 h-10 rounded-2xl text-white flex items-center justify-center font-black text-sm shrink-0 shadow-xs ${
+                            isUserAdmin
+                              ? 'bg-gradient-to-tr from-purple-600 to-indigo-700'
+                              : 'bg-gradient-to-tr from-emerald-600 to-teal-700'
+                          }`}>
                             {displayName ? displayName[0].toUpperCase() : 'U'}
                           </div>
                           <div>
-                            <div className="font-extrabold text-[var(--text-primary)] text-sm">{displayName}</div>
+                            <div className="font-extrabold text-[var(--text-primary)] text-sm flex items-center gap-1.5">
+                              <span>{displayName}</span>
+                              {isUserAdmin && (
+                                <Crown className="w-3.5 h-3.5 text-amber-500 fill-amber-500" />
+                              )}
+                            </div>
                             <div className="text-[11px] text-[var(--text-secondary)] font-semibold">
-                              {emp.designation || 'Operations Staff'}
+                              {emp.designation || (isUserAdmin ? 'Operations Administrator' : 'Operations Staff')}
                             </div>
                           </div>
                         </div>
+                      </td>
+
+                      {/* System Access (Admin / Staff) */}
+                      <td className="py-4 px-6">
+                        {isUserAdmin ? (
+                          <div className="flex flex-col items-start gap-1">
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl text-[11px] font-black bg-gradient-to-r from-purple-500/15 via-indigo-500/15 to-purple-500/20 text-purple-700 dark:text-purple-300 border border-purple-300 dark:border-purple-800 shadow-2xs">
+                              <Crown className="w-3.5 h-3.5 text-purple-600 dark:text-purple-400" />
+                              <span>Operations Admin</span>
+                            </span>
+                            <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-extrabold flex items-center gap-0.5">
+                              ✓ Full Admin Access
+                            </span>
+                          </div>
+                        ) : (
+                          <div className="flex flex-col items-start gap-1">
+                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl text-[11px] font-bold bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
+                              <Shield className="w-3 h-3 text-slate-400" />
+                              <span>Standard Staff</span>
+                            </span>
+                            <span className="text-[10px] text-[var(--text-muted)] font-medium">
+                              Department Access
+                            </span>
+                          </div>
+                        )}
                       </td>
 
                       {/* Email & Code */}
@@ -613,6 +688,21 @@ export default function AdminEmployeesPage() {
                       {/* Actions */}
                       <td className="py-4 px-6 text-right">
                         <div className="flex items-center justify-end gap-2">
+                          {/* Toggle Admin Button */}
+                          <button
+                            type="button"
+                            onClick={() => setToggleAdminEmp(emp)}
+                            className={`px-2.5 py-1.5 rounded-xl font-bold text-xs transition flex items-center gap-1.5 cursor-pointer shadow-2xs ${
+                              isUserAdmin
+                                ? 'bg-amber-500/10 hover:bg-amber-500/20 text-amber-700 dark:text-amber-300 border border-amber-300 dark:border-amber-800'
+                                : 'bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white shadow-xs'
+                            }`}
+                            title={isUserAdmin ? 'Revoke Admin Privileges' : 'Assign Full Admin Privileges'}
+                          >
+                            <Crown className="w-3.5 h-3.5" />
+                            <span>{isUserAdmin ? 'Revoke Admin' : 'Make Admin'}</span>
+                          </button>
+
                           <button
                             onClick={() => openEditModal(emp)}
                             className="p-2 text-[var(--text-secondary)] hover:text-sky-500 hover:bg-[var(--hover-bg)] rounded-xl transition cursor-pointer"
@@ -729,6 +819,32 @@ export default function AdminEmployeesPage() {
                       </span>
                     </label>
                   </div>
+                </div>
+
+                {/* 4b. Administrator Privileges Switch */}
+                <div className="p-3.5 sm:p-4 bg-gradient-to-r from-purple-500/10 via-indigo-500/10 to-transparent rounded-2xl border border-purple-200 dark:border-purple-800/80 flex items-center justify-between gap-4">
+                  <div className="flex items-center gap-3">
+                    <div className="w-9 h-9 rounded-xl bg-purple-100 dark:bg-purple-900/60 text-purple-600 dark:text-purple-300 flex items-center justify-center shrink-0 shadow-2xs">
+                      <Crown className="w-5 h-5 text-purple-600 dark:text-purple-400" />
+                    </div>
+                    <div>
+                      <div className="font-black text-xs text-purple-950 dark:text-purple-200 flex items-center gap-1.5">
+                        <span>Assign Full Admin Access (Operations Administrator)</span>
+                      </div>
+                      <div className="text-[10px] sm:text-[11px] text-purple-800/80 dark:text-purple-300/80 leading-relaxed mt-0.5">
+                        Grant this OP user full administrator rights across all operations, department managers, employee accounts, and task assignment controls.
+                      </div>
+                    </div>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                    <input
+                      type="checkbox"
+                      checked={formIsAdmin}
+                      onChange={(e) => setFormIsAdmin(e.target.checked)}
+                      className="sr-only peer"
+                    />
+                    <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer dark:bg-slate-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-slate-600 peer-checked:bg-purple-600"></div>
+                  </label>
                 </div>
 
                 {/* 5. DEPARTMENT ACCESS INLINE (MATCHING DJANGO ADMIN SCREENSHOTS 1, 2, 3) */}
@@ -906,6 +1022,73 @@ export default function AdminEmployeesPage() {
               >
                 {saving && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
                 <span>Confirm Delete</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ─── TOGGLE ADMIN ACCESS CONFIRMATION MODAL ─── */}
+      {toggleAdminEmp && (
+        <div className="fixed inset-0 bg-slate-900/60 dark:bg-black/80 backdrop-blur-sm z-[10000] flex items-center justify-center p-4">
+          <div className="bg-[var(--card-bg)] border border-[var(--card-border)] rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-4 animate-scaleUp">
+            <div className="flex items-center justify-between border-b border-[var(--card-border)] pb-3">
+              <div className="flex items-center gap-2">
+                <Crown className="w-5 h-5 text-purple-600 dark:text-purple-400" />
+                <h3 className="text-base font-black text-[var(--text-primary)]">
+                  {toggleAdminEmp.role === 'admin' || toggleAdminEmp.is_superadmin
+                    ? 'Revoke Admin Access'
+                    : 'Assign Full Admin Access'}
+                </h3>
+              </div>
+              <button
+                onClick={() => setToggleAdminEmp(null)}
+                className="p-1 hover:bg-[var(--hover-bg)] rounded-xl cursor-pointer text-[var(--text-muted)] hover:text-[var(--text-primary)]"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-3 text-xs">
+              <div className="p-4 bg-purple-500/10 border border-purple-500/20 rounded-2xl text-purple-950 dark:text-purple-200 space-y-1.5">
+                <p className="font-extrabold text-xs">
+                  Target Employee: {toggleAdminEmp.full_name || toggleAdminEmp.name}
+                </p>
+                <p className="font-mono text-[11px] text-purple-700 dark:text-purple-300">
+                  {toggleAdminEmp.email}
+                </p>
+                <p className="text-[11px] leading-relaxed pt-1 text-slate-700 dark:text-slate-300">
+                  {toggleAdminEmp.role === 'admin' || toggleAdminEmp.is_superadmin
+                    ? 'Are you sure you want to revoke Admin privileges from this user? Their account will be reverted to standard employee access.'
+                    : 'Are you sure you want to promote this employee to Operations Administrator? Once assigned, they will have full administrator access to all operations, employee logins, department managers, and task assignment controls.'}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2.5 pt-2">
+              <button
+                type="button"
+                onClick={() => setToggleAdminEmp(null)}
+                className="px-4 py-2 border border-[var(--card-border)] rounded-xl font-bold text-[var(--text-secondary)] hover:bg-[var(--hover-bg)] transition cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={togglingAdmin}
+                onClick={() => handleToggleAdminRole(toggleAdminEmp)}
+                className={`px-5 py-2 text-white rounded-xl font-bold shadow-sm transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50 ${
+                  toggleAdminEmp.role === 'admin' || toggleAdminEmp.is_superadmin
+                    ? 'bg-rose-600 hover:bg-rose-700'
+                    : 'bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700'
+                }`}
+              >
+                {togglingAdmin && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
+                <span>
+                  {toggleAdminEmp.role === 'admin' || toggleAdminEmp.is_superadmin
+                    ? 'Confirm Revocation'
+                    : 'Confirm Admin Access'}
+                </span>
               </button>
             </div>
           </div>

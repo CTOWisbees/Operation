@@ -19,7 +19,12 @@ import {
   Globe,
   Tag,
   Clock,
-  AlertCircle
+  AlertCircle,
+  AlertTriangle,
+  ThumbsUp,
+  ThumbsDown,
+  Star,
+  Check
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { StatusBadge, PriorityBadge } from '@/components/Badges';
@@ -55,6 +60,21 @@ export default function AdminTasksPage() {
   const [showDetailModal, setShowDetailModal] = useState(false);
   const [selectedTask, setSelectedTask] = useState<any>(null);
   const [saving, setSaving] = useState(false);
+
+  // Extend Deadline Modal State
+  const [showExtendModal, setShowExtendModal] = useState(false);
+  const [extendTaskId, setExtendTaskId] = useState<number | null>(null);
+  const [extendTaskTitle, setExtendTaskTitle] = useState('');
+  const [extendedDeadline, setExtendedDeadline] = useState('');
+  const [extendNotes, setExtendNotes] = useState('');
+  const [extending, setExtending] = useState(false);
+
+  // Review Delay Modal State
+  const [showRejectDelayModal, setShowRejectDelayModal] = useState(false);
+  const [reviewTaskId, setReviewTaskId] = useState<number | null>(null);
+  const [penaltyPoints, setPenaltyPoints] = useState(10);
+  const [rejectNotes, setRejectNotes] = useState('');
+  const [reviewing, setReviewing] = useState(false);
 
   // Create Form State
   const [formTitle, setFormTitle] = useState('');
@@ -228,6 +248,111 @@ export default function AdminTasksPage() {
       fetchTasksAndEmployees();
     } catch (err) {
       showAlert('Failed to delete task.', 'error');
+    }
+  };
+
+  const openExtendDeadlineModal = (task: any) => {
+    setExtendTaskId(task.id);
+    setExtendTaskTitle(task.title);
+    setExtendedDeadline(
+      task.extended_deadline ||
+      task.deadline ||
+      task.due_date ||
+      new Date(Date.now() + 86400000 * 3).toISOString().split('T')[0]
+    );
+    setExtendNotes('');
+    setShowExtendModal(true);
+  };
+
+  const handleExtendDeadline = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!extendTaskId || !extendedDeadline) return;
+
+    try {
+      setExtending(true);
+      const res = await api.post(`/tasks/${extendTaskId}/extend-deadline`, {
+        extended_deadline: extendedDeadline,
+        notes: extendNotes,
+      });
+
+      if (res.data?.success) {
+        showAlert(res.data.message || 'Deadline extended successfully (Final Deadline)!');
+        setShowExtendModal(false);
+        fetchTasksAndEmployees();
+        if (selectedTask?.id === extendTaskId) {
+          setSelectedTask((prev: any) => ({
+            ...prev,
+            extended_deadline: extendedDeadline,
+            is_deadline_extended: true,
+          }));
+        }
+      } else {
+        showAlert(res.data?.error || 'Failed to extend deadline.', 'error');
+      }
+    } catch (err: any) {
+      showAlert(err.response?.data?.error || 'Failed to extend deadline.', 'error');
+    } finally {
+      setExtending(false);
+    }
+  };
+
+  const handleAcceptDelay = async (taskId: number, taskTitle: string) => {
+    try {
+      const res = await api.post(`/tasks/${taskId}/review-delay`, {
+        action: 'accept',
+        notes: 'Delay explanation accepted by admin.',
+      });
+      if (res.data?.success) {
+        showAlert(`Delay explanation for "${taskTitle}" ACCEPTED. No points deducted.`);
+        fetchTasksAndEmployees();
+        if (selectedTask?.id === taskId) {
+          setSelectedTask((prev: any) => ({ ...prev, delay_status: 'Accepted' }));
+        }
+      } else {
+        showAlert(res.data?.error || 'Failed to accept delay.', 'error');
+      }
+    } catch (err: any) {
+      showAlert(err.response?.data?.error || 'Failed to accept delay.', 'error');
+    }
+  };
+
+  const openRejectDelayModal = (taskId: number) => {
+    setReviewTaskId(taskId);
+    setPenaltyPoints(10);
+    setRejectNotes('');
+    setShowRejectDelayModal(true);
+  };
+
+  const handleRejectDelay = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!reviewTaskId) return;
+
+    try {
+      setReviewing(true);
+      const res = await api.post(`/tasks/${reviewTaskId}/review-delay`, {
+        action: 'reject',
+        penalty_points: Number(penaltyPoints) || 10,
+        notes: rejectNotes || 'Delay explanation rejected by admin due to unjustified delay.',
+      });
+
+      if (res.data?.success) {
+        showAlert(res.data.message || 'Delay explanation rejected. Points deducted!');
+        setShowRejectDelayModal(false);
+        fetchTasksAndEmployees();
+        if (selectedTask?.id === reviewTaskId) {
+          setSelectedTask((prev: any) => ({
+            ...prev,
+            delay_status: 'Rejected',
+            points_deducted: penaltyPoints,
+          }));
+        }
+      } else {
+        showAlert(res.data?.error || 'Failed to reject delay.', 'error');
+      }
+    } catch (err: any) {
+      showAlert(err.response?.data?.error || 'Failed to reject delay.', 'error');
+    } finally {
+      setReviewing(false);
     }
   };
 
@@ -432,12 +557,22 @@ export default function AdminTasksPage() {
                         }}
                         className="p-4 bg-[var(--hover-bg)]/50 hover:bg-[var(--hover-bg)] border border-[var(--card-border)] hover:border-sky-400 dark:hover:border-sky-600 rounded-2xl shadow-2xs hover:shadow-md transition cursor-pointer space-y-3 group"
                       >
-                        <div className="flex items-start justify-between gap-2">
+                        <div className="flex items-start justify-between gap-2 flex-wrap">
                           <PriorityBadge priority={t.priority} />
-                          {t.deadline && (
+                          {t.is_deadline_extended || t.extended_deadline ? (
+                            <span className="text-[9px] font-black px-2 py-0.5 rounded-md bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/30 flex items-center gap-1">
+                              <Clock className="w-2.5 h-2.5 text-amber-600" />
+                              <span>Extended Deadline (Final Deadline): {t.extended_deadline}</span>
+                            </span>
+                          ) : t.deadline ? (
                             <span className="text-[10px] font-bold text-[var(--text-muted)] flex items-center gap-1">
                               <Calendar className="w-3 h-3 text-sky-500" />
                               <span>{t.deadline}</span>
+                            </span>
+                          ) : null}
+                          {t.is_overdue && (
+                            <span className="px-1.5 py-0.5 rounded text-[9px] font-extrabold bg-rose-500/15 text-rose-600 dark:text-rose-400 border border-rose-500/30 flex items-center gap-0.5">
+                              <AlertTriangle className="w-2.5 h-2.5" /> Overdue
                             </span>
                           )}
                         </div>
@@ -453,8 +588,52 @@ export default function AdminTasksPage() {
                           )}
                         </div>
 
-                        {/* Quick Lane Transition Selector */}
-                        <div className="pt-2 border-t border-[var(--card-border)]/60 flex items-center justify-between gap-2">
+                        {/* Delay Explanation Review Banner if pending */}
+                        {t.delay_reason && (t.delay_status === 'Pending' || t.delay_status === 'pending_review') && (
+                          <div
+                            className="p-2.5 bg-amber-50/80 dark:bg-amber-950/40 rounded-xl border border-amber-300 dark:border-amber-800 text-[11px] space-y-1.5"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <div className="flex items-center gap-1 font-black text-amber-800 dark:text-amber-300">
+                              <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                              <span>Late Reason ({t.assigned_to?.name || 'Assignee'}):</span>
+                            </div>
+                            <p className="italic text-amber-900 dark:text-amber-200 line-clamp-2">
+                              "{t.delay_reason}"
+                            </p>
+                            <div className="flex items-center gap-1.5 pt-0.5">
+                              <button
+                                type="button"
+                                onClick={() => handleAcceptDelay(t.id, t.title)}
+                                className="px-2 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-[10px] font-bold transition flex items-center gap-1 cursor-pointer shadow-2xs"
+                              >
+                                <ThumbsUp className="w-3 h-3" /> Accept
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => openRejectDelayModal(t.id)}
+                                className="px-2 py-1 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-[10px] font-bold transition flex items-center gap-1 cursor-pointer shadow-2xs"
+                              >
+                                <ThumbsDown className="w-3 h-3" /> Reject (-10 Pts)
+                              </button>
+                            </div>
+                          </div>
+                        )}
+
+                        {t.delay_reason && (t.delay_status === 'Accepted' || t.delay_status === 'accepted') && (
+                          <div className="flex items-center gap-1 text-[10px] font-bold text-emerald-600 dark:text-emerald-400">
+                            <Check className="w-3 h-3" /> Late Delay Accepted (No Penalty)
+                          </div>
+                        )}
+
+                        {t.delay_reason && (t.delay_status === 'Rejected' || t.delay_status === 'rejected') && (
+                          <div className="flex items-center gap-1 text-[10px] font-bold text-rose-600 dark:text-rose-400">
+                            <X className="w-3 h-3" /> Late Delay Rejected (-{t.points_deducted || 10} Pts)
+                          </div>
+                        )}
+
+                        {/* Quick Lane Transition Selector & Extend Button */}
+                        <div className="pt-2 border-t border-[var(--card-border)]/60 flex items-center justify-between gap-1.5">
                           <select
                             value={normalizeStatus(t.status)}
                             onClick={(e) => e.stopPropagation()}
@@ -470,9 +649,24 @@ export default function AdminTasksPage() {
                             <option value="Completed">Move: Completed</option>
                           </select>
 
-                          <span className="text-[10px] font-bold text-[var(--text-muted)] shrink-0">
-                            {t.estimated_hours || 0}h
-                          </span>
+                          <div className="flex items-center gap-1">
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                openExtendDeadlineModal(t);
+                              }}
+                              title="Extend Deadline (Final Deadline)"
+                              className="px-2 py-1 rounded-lg border border-amber-300 dark:border-amber-800 text-amber-700 dark:text-amber-300 hover:bg-amber-500/10 text-[10px] font-bold flex items-center gap-1 cursor-pointer transition"
+                            >
+                              <Clock className="w-3 h-3" />
+                              <span>Extend</span>
+                            </button>
+
+                            <span className="text-[10px] font-bold text-[var(--text-muted)] shrink-0">
+                              {t.estimated_hours || 0}h
+                            </span>
+                          </div>
                         </div>
 
                         <div className="flex items-center justify-between text-[11px] pt-1">
@@ -539,6 +733,41 @@ export default function AdminTasksPage() {
                             {t.description}
                           </div>
                         )}
+                        {/* Late Reason Banner if pending */}
+                        {t.delay_reason && (t.delay_status === 'Pending' || t.delay_status === 'pending_review') && (
+                          <div
+                            className="mt-2 p-2 bg-amber-50/90 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 rounded-lg flex items-center justify-between gap-2"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <span className="text-[10px] text-amber-900 dark:text-amber-200 italic line-clamp-1">
+                              Late Reason: "{t.delay_reason}"
+                            </span>
+                            <div className="flex items-center gap-1 shrink-0">
+                              <button
+                                onClick={() => handleAcceptDelay(t.id, t.title)}
+                                className="px-2 py-0.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-[9px] font-bold cursor-pointer"
+                              >
+                                Accept
+                              </button>
+                              <button
+                                onClick={() => openRejectDelayModal(t.id)}
+                                className="px-2 py-0.5 bg-rose-600 hover:bg-rose-700 text-white rounded text-[9px] font-bold cursor-pointer"
+                              >
+                                Reject (-10 Pts)
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                        {t.delay_reason && (t.delay_status === 'Accepted' || t.delay_status === 'accepted') && (
+                          <div className="mt-1 text-[10px] font-bold text-emerald-600 dark:text-emerald-400">
+                            ✓ Late Delay Accepted (No Penalty)
+                          </div>
+                        )}
+                        {t.delay_reason && (t.delay_status === 'Rejected' || t.delay_status === 'rejected') && (
+                          <div className="mt-1 text-[10px] font-bold text-rose-600 dark:text-rose-400">
+                            ✕ Late Delay Rejected (-{t.points_deducted || 10} Pts)
+                          </div>
+                        )}
                       </td>
                       <td className="py-4 px-6">
                         <div className="flex items-center gap-2">
@@ -560,16 +789,36 @@ export default function AdminTasksPage() {
                         <StatusBadge status={t.status} />
                       </td>
                       <td className="py-4 px-6 text-[var(--text-secondary)] font-medium">
-                        {t.deadline || '—'}
+                        {t.is_deadline_extended || t.extended_deadline ? (
+                          <div className="flex flex-col gap-0.5">
+                            <span className="text-[10px] font-black text-amber-600 dark:text-amber-400 flex items-center gap-1">
+                              <Clock className="w-3 h-3 text-amber-600" /> Extended Deadline (Final Deadline):
+                            </span>
+                            <span className="font-bold text-amber-700 dark:text-amber-300">
+                              {t.extended_deadline}
+                            </span>
+                          </div>
+                        ) : (
+                          <span>{t.deadline || '—'}</span>
+                        )}
                       </td>
                       <td className="py-4 px-6 text-right" onClick={(e) => e.stopPropagation()}>
-                        <button
-                          onClick={() => handleDeleteTask(t.id, t.title)}
-                          className="p-1.5 text-[var(--text-muted)] hover:text-red-500 rounded-lg transition"
-                          title="Delete Task"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
+                        <div className="flex items-center justify-end gap-1">
+                          <button
+                            onClick={() => openExtendDeadlineModal(t)}
+                            className="p-1.5 text-amber-600 hover:text-amber-700 hover:bg-amber-500/10 rounded-lg transition cursor-pointer"
+                            title="Extend Deadline (Final Deadline)"
+                          >
+                            <Clock className="w-4 h-4" />
+                          </button>
+                          <button
+                            onClick={() => handleDeleteTask(t.id, t.title)}
+                            className="p-1.5 text-[var(--text-muted)] hover:text-red-500 hover:bg-red-500/10 rounded-lg transition cursor-pointer"
+                            title="Delete Task"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))
@@ -914,19 +1163,116 @@ export default function AdminTasksPage() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3 p-3.5 bg-[var(--hover-bg)]/60 rounded-2xl border border-[var(--card-border)]">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-3.5 bg-[var(--hover-bg)]/60 rounded-2xl border border-[var(--card-border)]">
                 <div>
                   <div className="text-[10px] font-bold text-[var(--text-muted)] uppercase">Assignee</div>
-                  <div className="font-extrabold text-[var(--text-primary)] mt-0.5">{selectedTask.assigned_to?.name}</div>
-                  <div className="text-[10px] text-sky-600 dark:text-sky-400 font-semibold">{selectedTask.assigned_to?.department}</div>
+                  <div className="font-extrabold text-[var(--text-primary)] mt-0.5">{selectedTask.assigned_to?.name || 'Unassigned'}</div>
+                  <div className="text-[10px] text-sky-600 dark:text-sky-400 font-semibold">{selectedTask.assigned_to?.department || selectedTask.department || 'Operations'}</div>
                 </div>
 
                 <div>
-                  <div className="text-[10px] font-bold text-[var(--text-muted)] uppercase">Deadline</div>
-                  <div className="font-extrabold text-[var(--text-primary)] mt-0.5">{selectedTask.deadline || 'Flexible'}</div>
-                  <div className="text-[10px] text-[var(--text-muted)]">{selectedTask.estimated_hours} hours planned</div>
+                  {selectedTask.is_deadline_extended || selectedTask.extended_deadline ? (
+                    <div>
+                      <div className="text-[10px] font-black text-amber-600 dark:text-amber-400 uppercase flex items-center gap-1">
+                        <Clock className="w-3 h-3 text-amber-600" /> Extended Deadline (Final Deadline)
+                      </div>
+                      <div className="font-black text-amber-700 dark:text-amber-300 mt-0.5 text-sm">
+                        {selectedTask.extended_deadline}
+                      </div>
+                      <div className="text-[10px] text-[var(--text-muted)]">
+                        Original: {selectedTask.deadline || 'Flexible'} • {selectedTask.estimated_hours}h planned
+                      </div>
+                    </div>
+                  ) : (
+                    <div>
+                      <div className="text-[10px] font-bold text-[var(--text-muted)] uppercase">Deadline</div>
+                      <div className="font-extrabold text-[var(--text-primary)] mt-0.5">{selectedTask.deadline || 'Flexible'}</div>
+                      <div className="text-[10px] text-[var(--text-muted)]">{selectedTask.estimated_hours} hours planned</div>
+                    </div>
+                  )}
                 </div>
               </div>
+
+              {/* Extend Deadline Action Bar in Detail */}
+              <div className="flex items-center justify-between p-3 bg-amber-500/10 border border-amber-500/20 rounded-2xl">
+                <div>
+                  <div className="font-bold text-amber-800 dark:text-amber-300 text-xs flex items-center gap-1.5">
+                    <Clock className="w-4 h-4 text-amber-600" />
+                    <span>Deadline Management</span>
+                  </div>
+                  <div className="text-[10px] text-amber-700 dark:text-amber-400 mt-0.5">
+                    {selectedTask.is_deadline_extended
+                      ? `Extended to: ${selectedTask.extended_deadline} (Final Deadline)`
+                      : 'Exceed or grant an extended deadline for this deliverable'}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => openExtendDeadlineModal(selectedTask)}
+                  className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-xl font-bold text-xs flex items-center gap-1.5 transition cursor-pointer shadow-xs"
+                >
+                  <Clock className="w-3.5 h-3.5" />
+                  <span>{selectedTask.is_deadline_extended ? 'Update Final Deadline' : 'Extend Deadline'}</span>
+                </button>
+              </div>
+
+              {/* Late Delay Explanation Review Box */}
+              {selectedTask.delay_reason && (
+                <div className="p-4 bg-amber-50/90 dark:bg-amber-950/40 rounded-2xl border border-amber-300 dark:border-amber-800/80 space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-1.5 text-xs font-black text-amber-800 dark:text-amber-300">
+                      <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                      <span>Late Delay Explanation from {selectedTask.assigned_to?.name || 'Assignee'}:</span>
+                    </div>
+                    <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase ${
+                      selectedTask.delay_status === 'Accepted' || selectedTask.delay_status === 'accepted'
+                        ? 'bg-emerald-500/20 text-emerald-700 dark:text-emerald-300'
+                        : selectedTask.delay_status === 'Rejected' || selectedTask.delay_status === 'rejected'
+                        ? 'bg-rose-500/20 text-rose-700 dark:text-rose-300'
+                        : 'bg-amber-500/20 text-amber-800 dark:text-amber-300'
+                    }`}>
+                      {selectedTask.delay_status || 'Pending Review'}
+                    </span>
+                  </div>
+
+                  <p className="text-xs text-amber-950 dark:text-amber-100 italic bg-[var(--card-bg)]/80 p-3 rounded-xl border border-amber-200 dark:border-amber-900/60 leading-relaxed whitespace-pre-wrap font-medium">
+                    "{selectedTask.delay_reason}"
+                  </p>
+
+                  {(selectedTask.delay_status === 'Pending' || selectedTask.delay_status === 'pending_review' || !selectedTask.delay_status) && (
+                    <div className="flex items-center justify-end gap-2 pt-1">
+                      <button
+                        type="button"
+                        onClick={() => handleAcceptDelay(selectedTask.id, selectedTask.title)}
+                        className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-2xs cursor-pointer"
+                      >
+                        <ThumbsUp className="w-3.5 h-3.5" />
+                        <span>Accept Delay (OK)</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => openRejectDelayModal(selectedTask.id)}
+                        className="px-3.5 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-2xs cursor-pointer"
+                      >
+                        <ThumbsDown className="w-3.5 h-3.5" />
+                        <span>Reject & Deduct Points</span>
+                      </button>
+                    </div>
+                  )}
+
+                  {(selectedTask.delay_status === 'Accepted' || selectedTask.delay_status === 'accepted') && (
+                    <div className="text-[11px] font-bold text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
+                      <Check className="w-3.5 h-3.5" /> Delay explanation accepted by reviewer. No penalty applied.
+                    </div>
+                  )}
+
+                  {(selectedTask.delay_status === 'Rejected' || selectedTask.delay_status === 'rejected') && (
+                    <div className="text-[11px] font-bold text-rose-600 dark:text-rose-400 flex items-center gap-1">
+                      <X className="w-3.5 h-3.5" /> Delay explanation rejected. Penalty points deducted: -{selectedTask.points_deducted || 10} Pts
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* Status Update Quick Buttons */}
               <div className="space-y-1.5">
@@ -968,6 +1314,172 @@ export default function AdminTasksPage() {
                   Close
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Extend Deadline Modal ── */}
+      {showExtendModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-xs z-[10000] flex items-center justify-center p-4">
+          <div className="bg-[var(--card-bg)] border border-[var(--card-border)] rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-4 animate-scaleUp">
+            <div className="flex items-center justify-between border-b border-[var(--card-border)] pb-3">
+              <div className="flex items-center gap-2">
+                <Clock className="w-5 h-5 text-amber-500" />
+                <h3 className="text-base font-black text-[var(--text-primary)]">Extend Task Deadline</h3>
+              </div>
+              <button
+                onClick={() => setShowExtendModal(false)}
+                className="p-1 hover:bg-[var(--hover-bg)] rounded-xl cursor-pointer text-[var(--text-muted)] hover:text-[var(--text-primary)]"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleExtendDeadline} className="space-y-4 text-xs">
+              <div>
+                <p className="text-[11px] text-[var(--text-muted)]">
+                  Setting an extended deadline will explicitly flag the task with:
+                </p>
+                <div className="mt-1 px-3 py-1.5 bg-amber-500/10 border border-amber-500/30 rounded-xl font-extrabold text-amber-700 dark:text-amber-300">
+                  Extended Deadline (Final Deadline)
+                </div>
+              </div>
+
+              <div>
+                <label className="block font-bold uppercase tracking-wider text-[var(--text-secondary)] mb-1">
+                  Task
+                </label>
+                <div className="font-bold text-[var(--text-primary)] p-2.5 bg-[var(--hover-bg)] rounded-xl">
+                  {extendTaskTitle}
+                </div>
+              </div>
+
+              <div>
+                <label className="block font-bold uppercase tracking-wider text-[var(--text-secondary)] mb-1">
+                  New Extended Deadline (Final Deadline) *
+                </label>
+                <input
+                  type="date"
+                  required
+                  value={extendedDeadline}
+                  onChange={(e) => setExtendedDeadline(e.target.value)}
+                  className="w-full px-3.5 py-2.5 bg-[var(--input-bg)] border border-[var(--card-border)] rounded-xl font-semibold text-[var(--text-primary)] focus:outline-none focus:border-amber-500"
+                />
+              </div>
+
+              <div>
+                <label className="block font-bold uppercase tracking-wider text-[var(--text-secondary)] mb-1">
+                  Extension Reason / Instructions (Optional)
+                </label>
+                <textarea
+                  rows={3}
+                  value={extendNotes}
+                  onChange={(e) => setExtendNotes(e.target.value)}
+                  placeholder="e.g. Scope expanded, granting an extra 3 days to finalize deliverable..."
+                  className="w-full px-3.5 py-2.5 bg-[var(--input-bg)] border border-[var(--card-border)] rounded-xl font-medium text-[var(--text-primary)] focus:outline-none focus:border-amber-500"
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-2.5 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowExtendModal(false)}
+                  className="px-4 py-2 border border-[var(--card-border)] rounded-xl font-bold text-[var(--text-secondary)] hover:bg-[var(--hover-bg)] transition cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={extending}
+                  className="px-5 py-2 bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-700 hover:to-orange-700 text-white rounded-xl font-bold shadow-sm transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                >
+                  {extending && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
+                  <span>Save Extended Deadline</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ── Reject Delay Modal (Points Deduction) ── */}
+      {showRejectDelayModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-xs z-[10000] flex items-center justify-center p-4">
+          <div className="bg-[var(--card-bg)] border border-[var(--card-border)] rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-4 animate-scaleUp">
+            <div className="flex items-center justify-between border-b border-[var(--card-border)] pb-3">
+              <div className="flex items-center gap-2">
+                <ThumbsDown className="w-5 h-5 text-rose-500" />
+                <h3 className="text-base font-black text-[var(--text-primary)]">Reject Delay & Deduct Points</h3>
+              </div>
+              <button
+                onClick={() => setShowRejectDelayModal(false)}
+                className="p-1 hover:bg-[var(--hover-bg)] rounded-xl cursor-pointer text-[var(--text-muted)] hover:text-[var(--text-primary)]"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleRejectDelay} className="space-y-4 text-xs">
+              <div className="p-3 bg-rose-500/10 border border-rose-500/20 rounded-xl text-rose-700 dark:text-rose-300">
+                <p className="font-bold flex items-center gap-1">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span>Deduction Policy</span>
+                </p>
+                <p className="mt-1 text-[11px] leading-relaxed">
+                  Rejecting this delay explanation will immediately deduct points from the employee's performance score (or all team members if assigned to a team/group).
+                </p>
+              </div>
+
+              <div>
+                <label className="block font-bold uppercase tracking-wider text-[var(--text-secondary)] mb-1">
+                  Penalty Points to Deduct
+                </label>
+                <input
+                  type="number"
+                  min="1"
+                  max="100"
+                  required
+                  value={penaltyPoints}
+                  onChange={(e) => setPenaltyPoints(Number(e.target.value))}
+                  className="w-full px-3.5 py-2.5 bg-[var(--input-bg)] border border-[var(--card-border)] rounded-xl font-bold text-[var(--text-primary)] focus:outline-none focus:border-rose-500 text-sm"
+                />
+              </div>
+
+              <div>
+                <label className="block font-bold uppercase tracking-wider text-[var(--text-secondary)] mb-1">
+                  Manager/Admin Rejection Notes
+                </label>
+                <textarea
+                  rows={3}
+                  value={rejectNotes}
+                  onChange={(e) => setRejectNotes(e.target.value)}
+                  placeholder="Explain why the delay is not accepted (e.g. Unjustified delay without prior communication)..."
+                  className="w-full px-3.5 py-2.5 bg-[var(--input-bg)] border border-[var(--card-border)] rounded-xl font-medium text-[var(--text-primary)] focus:outline-none focus:border-rose-500"
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-2.5 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowRejectDelayModal(false)}
+                  className="px-4 py-2 border border-[var(--card-border)] rounded-xl font-bold text-[var(--text-secondary)] hover:bg-[var(--hover-bg)] transition cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={reviewing}
+                  className="px-5 py-2 bg-gradient-to-r from-rose-600 to-red-600 hover:from-rose-700 hover:to-red-700 text-white rounded-xl font-bold shadow-sm transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                >
+                  {reviewing && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
+                  <span>Confirm Rejection (-{penaltyPoints} Pts)</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
             </div>
           </div>
         </div>

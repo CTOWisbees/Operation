@@ -69,6 +69,7 @@ class OperationUser(models.Model):
     joining_date = models.DateField(default=timezone.now)
     avatar_url = models.TextField(blank=True, default='')
     skills = models.CharField(max_length=255, blank=True, default='')
+    points = models.IntegerField(default=100, verbose_name="Performance Points")
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -215,11 +216,22 @@ class WorkTask(models.Model):
 
     title = models.CharField(max_length=200)
     description = models.TextField(blank=True, default='')
-    assigned_to = models.ForeignKey(OperationUser, on_delete=models.CASCADE, related_name='assigned_tasks')
-    created_by = models.ForeignKey(OperationUser, on_delete=models.SET_NULL, null=True, related_name='created_tasks')
+    assigned_to = models.ForeignKey(OperationUser, on_delete=models.CASCADE, null=True, blank=True, related_name='assigned_tasks')
+    created_by = models.ForeignKey(OperationUser, on_delete=models.SET_NULL, null=True, blank=True, related_name='created_tasks')
+    department = models.CharField(max_length=100, blank=True, default='')
+    assigned_mode = models.CharField(max_length=50, default='single')  # 'single', 'multiple', 'department', 'everyone'
     priority = models.CharField(max_length=20, choices=PRIORITY_CHOICES, default='Medium', db_index=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='Todo', db_index=True)
     deadline = models.DateField(null=True, blank=True)
+    extended_deadline = models.DateField(null=True, blank=True, verbose_name="Extended Deadline (Final Deadline)")
+    is_deadline_extended = models.BooleanField(default=False)
+    delay_reason = models.TextField(blank=True, default='', verbose_name="Delay Explanation")
+    delay_status = models.CharField(max_length=30, default='None', choices=[('None', 'None'), ('Pending', 'Pending Review'), ('Accepted', 'Accepted'), ('Rejected', 'Rejected')])
+    delay_reviewed_by = models.ForeignKey(OperationUser, on_delete=models.SET_NULL, null=True, blank=True, related_name='delay_reviews')
+    delay_reviewed_at = models.DateTimeField(null=True, blank=True)
+    delay_review_notes = models.TextField(blank=True, default='')
+    points_awarded = models.IntegerField(default=0)
+    points_deducted = models.IntegerField(default=0)
     estimated_hours = models.FloatField(default=0.0)
     tags = models.CharField(max_length=200, blank=True, default='')
     attachment_url = models.CharField(max_length=255, blank=True, default='')
@@ -230,7 +242,8 @@ class WorkTask(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
-        return f"[{self.priority}] {self.title} -> {self.assigned_to.name} ({self.status})"
+        assignee_name = self.assigned_to.name if self.assigned_to else f"Group/Dept ({self.department})"
+        return f"[{self.priority}] {self.title} -> {assignee_name} ({self.status})"
 
 
 class WorkLog(models.Model):
@@ -328,9 +341,21 @@ class DailyAssignedTask(models.Model):
     department = models.CharField(max_length=100, db_index=True)
     assigned_by = models.ForeignKey(OperationUser, on_delete=models.CASCADE, related_name='ops_assigned_tasks_created')
     assigned_to = models.ForeignKey(OperationUser, on_delete=models.CASCADE, null=True, blank=True, related_name='ops_assigned_tasks_received')
+    work_task = models.ForeignKey(WorkTask, on_delete=models.CASCADE, null=True, blank=True, related_name='daily_tasks')
     task_type = models.CharField(max_length=50, default='Major')
     priority = models.CharField(max_length=20, default='Normal', db_index=True)  # Low | Normal | High | Urgent
     due_date = models.DateField(null=True, blank=True)
+    extended_deadline = models.DateField(null=True, blank=True, verbose_name="Extended Deadline (Final Deadline)")
+    is_deadline_extended = models.BooleanField(default=False)
+    delay_reason = models.TextField(blank=True, default='', verbose_name="Delay Explanation")
+    delay_status = models.CharField(max_length=30, default='None', choices=[('None', 'None'), ('Pending', 'Pending Review'), ('Accepted', 'Accepted'), ('Rejected', 'Rejected')])
+    delay_reviewed_by = models.ForeignKey(OperationUser, on_delete=models.SET_NULL, null=True, blank=True, related_name='daily_task_delay_reviews')
+    delay_reviewed_at = models.DateTimeField(null=True, blank=True)
+    delay_review_notes = models.TextField(blank=True, default='')
+    points_awarded = models.IntegerField(default=0)
+    points_deducted = models.IntegerField(default=0)
+    submission_notes = models.TextField(blank=True, default='')
+    submission_link = models.CharField(max_length=255, blank=True, default='')
     status = models.CharField(max_length=30, default='Pending', db_index=True)  # Pending | In Progress | Completed | Flagged
     is_flagged = models.BooleanField(default=False)
     flag_reason = models.TextField(null=True, blank=True)
@@ -519,4 +544,46 @@ class EquityResearchReport(models.Model):
 
     def __str__(self):
         return f"{self.symbol} - {self.company_name} ({self.recommendation}) [{self.updated_at.strftime('%Y-%m-%d')}]"
+
+
+# ─────────────────────────────────────────────────────────────
+# NOTIFICATIONS AND POINTS SYSTEM MODULES
+# ─────────────────────────────────────────────────────────────
+
+class Notification(models.Model):
+    recipient = models.ForeignKey(OperationUser, on_delete=models.CASCADE, related_name='notifications')
+    sender = models.ForeignKey(OperationUser, on_delete=models.SET_NULL, null=True, blank=True, related_name='sent_notifications')
+    title = models.CharField(max_length=255)
+    message = models.TextField()
+    notification_type = models.CharField(max_length=50, default='general')  # 'task_assigned', 'task_submitted', 'deadline_extended', 'delay_explanation', 'delay_decision', 'point_award'
+    task_id = models.IntegerField(null=True, blank=True)
+    link = models.CharField(max_length=255, blank=True, default='')
+    is_read = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "Notification"
+        verbose_name_plural = "Notifications"
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"Notification for {self.recipient.email}: {self.title}"
+
+
+class PointTransaction(models.Model):
+    user = models.ForeignKey(OperationUser, on_delete=models.CASCADE, related_name='point_transactions')
+    points = models.IntegerField()  # Positive for reward, negative for deduction
+    reason = models.CharField(max_length=255)
+    task = models.ForeignKey(WorkTask, on_delete=models.SET_NULL, null=True, blank=True)
+    created_by = models.ForeignKey(OperationUser, on_delete=models.SET_NULL, null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "Point Transaction"
+        verbose_name_plural = "Point Transactions"
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.user.name}: {self.points:+d} pts ({self.reason})"
+
 

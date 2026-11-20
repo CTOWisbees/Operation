@@ -212,7 +212,13 @@ export default function AdminDashboardPage() {
                       <span className="font-semibold text-[var(--text-primary)]">
                         👤 {t.assigned_to?.name || 'Unassigned'}
                       </span>
-                      {t.deadline && <span>📅 Due: {t.deadline}</span>}
+                      {t.is_deadline_extended || t.extended_deadline ? (
+                        <span className="font-bold text-amber-600 dark:text-amber-400">
+                          ⏱️ Final Deadline: {t.extended_deadline}
+                        </span>
+                      ) : (
+                        t.deadline && <span>📅 Due: {t.deadline}</span>
+                      )}
                       {t.tags?.length > 0 && (
                         <span className="text-[10px] px-2 py-0.5 rounded-md bg-[var(--hover-bg)] font-mono border border-[var(--card-border)]">
                           {t.tags.join(', ')}

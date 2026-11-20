@@ -37,7 +37,7 @@ interface SidebarProps {
 export function Sidebar({ user, mobileOpen, setMobileOpen }: SidebarProps) {
   const pathname = usePathname();
   const router = useRouter();
-  const isAdmin = user?.role === 'admin';
+  const isAdmin = user?.role === 'admin' || user?.is_superadmin;
 
   // Collect all assigned departments, department accesses, and role titles for the employee
   const assignedDepts: string[] = Array.isArray(user?.assigned_departments)
