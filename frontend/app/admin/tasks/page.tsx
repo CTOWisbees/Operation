@@ -1480,10 +1480,6 @@ export default function AdminTasksPage() {
           </div>
         </div>
       )}
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
